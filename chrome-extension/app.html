@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SJTU 课堂概要导出</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div class="mark">S</div>
+      <div>
+        <h1>SJTU 课堂概要导出</h1>
+        <p>平台字幕直接读取 · 按天合并 · DeepSeek 考试笔记</p>
+      </div>
+      <span class="local">纯扩展运行</span>
+    </header>
+
+    <section class="card course-card">
+      <div>
+        <span class="eyebrow">当前课程</span>
+        <h2 id="course">正在查找已打开的课堂视频页…</h2>
+        <p id="meta">请保持课程页面在 Chrome 中打开并已完成登录。</p>
+      </div>
+      <button id="refresh" class="secondary">重新读取</button>
+    </section>
+
+    <section class="card">
+      <div class="section-title">
+        <div>
+          <span class="eyebrow">导出设置</span>
+          <h2>一天的课程合并为一个文件</h2>
+        </div>
+        <label class="switch">
+          <input id="use-ai" type="checkbox" checked>
+          <span></span>
+          使用 DeepSeek
+        </label>
+      </div>
+
+      <label class="field" id="key-row">
+        <span>DeepSeek API Key</span>
+        <div class="key-line">
+          <input id="api-key" type="password" autocomplete="off" placeholder="sk-…">
+          <button id="save-key" class="secondary">长期保存</button>
+        </div>
+        <small id="key-note">密钥会长期保存在本机 Chrome 扩展存储中；更新扩展不会清除，卸载扩展会删除。</small>
+      </label>
+
+      <label class="field compact">
+        <span>导出范围</span>
+        <select id="scope" disabled><option>正在读取日期…</option></select>
+      </label>
+      <div class="actions">
+        <button id="export-selected" class="primary" disabled>导出所选范围</button>
+      </div>
+    </section>
+
+    <section class="card progress-card">
+      <div class="progress-head">
+        <strong id="progress-title">准备就绪</strong>
+        <span id="progress-count">0 / 0</span>
+      </div>
+      <div class="track"><div id="bar"></div></div>
+      <pre id="log">打开课程视频页后，点击“重新读取”。</pre>
+    </section>
+
+    <footer>不会读取 Cookie、Local Storage、tokenId 或账号密码。请仅导出你有权访问的课程内容。</footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
