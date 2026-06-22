@@ -1,5 +1,32 @@
 const $ = selector => document.querySelector(selector);
-const state = {tab: null, replays: [], metadata: {}, running: false};
+const state = {tab: null, replays: [], metadata: {}, running: false, previewCache: new Map(), previewTimer: null};
+
+const PROVIDERS = {
+  deepseek: {
+    label: "DeepSeek",
+    defaultModel: "deepseek-v4-flash",
+    keyPlaceholder: "sk-...",
+    storageKey: "deepseekApiKey"
+  },
+  openai: {
+    label: "ChatGPT / OpenAI",
+    defaultModel: "gpt-4.1-mini",
+    keyPlaceholder: "sk-...",
+    storageKey: "openaiApiKey"
+  },
+  anthropic: {
+    label: "Claude / Anthropic",
+    defaultModel: "claude-sonnet-4-5-20250929",
+    keyPlaceholder: "sk-ant-...",
+    storageKey: "anthropicApiKey"
+  },
+  gemini: {
+    label: "Gemini / Google",
+    defaultModel: "gemini-2.5-flash",
+    keyPlaceholder: "AIza...",
+    storageKey: "geminiApiKey"
+  }
+};
 
 const DEFAULT_PROMPT = `你是课堂笔记整理助手。请根据课堂概要、章节导航和字幕，整理一份适合复习与回顾的中文 Markdown 课堂笔记。
 
@@ -25,6 +52,11 @@ function setRunning(running) {
   $("#select-all-days").disabled = running || !state.replays.length;
   $("#clear-days").disabled = running || !state.replays.length;
   document.querySelectorAll(".day-check").forEach(input => input.disabled = running);
+}
+
+function currentProvider() {
+  const id = $("#provider").value;
+  return {id, ...PROVIDERS[id]};
 }
 
 function progress(done, total, title) {
@@ -111,6 +143,8 @@ function renderDayChecks(grouped) {
     input.checked = true;
     const text = document.createElement("span");
     text.textContent = `${day}（${grouped.get(day).length} 段）`;
+    label.addEventListener("mouseenter", () => schedulePreview(day, label));
+    label.addEventListener("mouseleave", hidePreview);
     label.append(input, text);
     list.append(label);
   }
@@ -118,29 +152,6 @@ function renderDayChecks(grouped) {
 
 function selectedDays() {
   return new Set([...document.querySelectorAll(".day-check:checked")].map(input => input.value));
-}
-
-function summaryMarkdown(day, lessons) {
-  const lines = [
-    `# ${state.metadata.course || "课堂"} · ${day} 平台概要`,
-    "",
-    `> 教师：${state.metadata.teacher || "未显示"}  `,
-    `> 当日回放：${lessons.length} 段  `,
-    ""
-  ];
-  lessons.forEach((lesson, index) => {
-    lines.push(`## 第 ${index + 1} 段 · ${lesson.time.slice(11, 16)}`, "");
-    const summary = lesson.platformSummary || {};
-    if (summary.overview) lines.push("### 平台概要", "", summary.overview, "");
-    if (summary.chapters?.length) {
-      lines.push("### 章节导航", "");
-      summary.chapters.forEach(item => {
-        lines.push(`- **${item.start || ""} ${item.title || ""}**：${item.content || ""}`);
-      });
-      lines.push("");
-    }
-  });
-  return lines.join("\n");
 }
 
 function captionsMarkdown(day, lessons) {
@@ -163,6 +174,67 @@ function captionsMarkdown(day, lessons) {
   return lines.join("\n");
 }
 
+function captionsPreview(lessons, limit = 1300) {
+  const chunks = [];
+  for (const lesson of lessons) {
+    chunks.push(`【${lesson.time.slice(11, 16)}】`);
+    const rows = lesson.captions || [];
+    for (const item of rows.slice(0, 20)) chunks.push(`${item.start} ${item.text}`);
+  }
+  const text = chunks.join("\n").trim();
+  return text.length > limit ? `${text.slice(0, limit)}\n…` : text || "未读取到字幕。";
+}
+
+function ensurePreviewBox() {
+  let box = $("#preview-box");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "preview-box";
+    box.className = "preview-box hidden";
+    document.body.append(box);
+  }
+  return box;
+}
+
+function showPreview(anchor, text) {
+  const box = ensurePreviewBox();
+  const rect = anchor.getBoundingClientRect();
+  box.textContent = text;
+  box.style.left = `${Math.min(rect.left, window.innerWidth - 430)}px`;
+  box.style.top = `${rect.bottom + 8 + window.scrollY}px`;
+  box.classList.remove("hidden");
+}
+
+function hidePreview() {
+  clearTimeout(state.previewTimer);
+  const box = $("#preview-box");
+  if (box) box.classList.add("hidden");
+}
+
+function schedulePreview(day, anchor) {
+  clearTimeout(state.previewTimer);
+  state.previewTimer = setTimeout(() => showDayPreview(day, anchor), 450);
+}
+
+async function showDayPreview(day, anchor) {
+  if (state.running) return;
+  if (state.previewCache.has(day)) {
+    showPreview(anchor, state.previewCache.get(day));
+    return;
+  }
+  showPreview(anchor, "正在读取当天字幕预览…");
+  try {
+    state.tab = await courseTab();
+    const replays = state.replays.filter(item => item.time.slice(0, 10) === day);
+    const {lessons} = await collect(replays, {silent: true});
+    const preview = captionsPreview(lessons);
+    state.previewCache.set(day, preview);
+    showPreview(anchor, preview);
+  } catch (error) {
+    showPreview(anchor, `预览失败：${error.message}`);
+  }
+}
+
 function aiSource(lessons) {
   const sections = lessons.map((lesson, index) => {
     const summary = lesson.platformSummary || {};
@@ -175,26 +247,67 @@ function aiSource(lessons) {
   return sections.slice(0, 120000);
 }
 
-async function deepSeekDay(day, lessons, apiKey, extraPrompt) {
+async function completeWithAI(prompt, apiKey, provider, model) {
+  if (provider === "deepseek" || provider === "openai") {
+    const base = provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com";
+    const response = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "Authorization": `Bearer ${apiKey}`},
+      body: JSON.stringify({
+        model,
+        messages: [{role: "user", content: prompt}],
+        temperature: 0.2,
+        max_tokens: 5000
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error?.message || `${PROVIDERS[provider].label} 请求失败（${response.status}）`);
+    return data.choices?.[0]?.message?.content?.trim() || "";
+  }
+  if (provider === "anthropic") {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 5000,
+        temperature: 0.2,
+        messages: [{role: "user", content: prompt}]
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error?.message || `Claude 请求失败（${response.status}）`);
+    return (data.content || []).map(item => item.text || "").join("").trim();
+  }
+  if (provider === "gemini") {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        contents: [{parts: [{text: prompt}]}],
+        generationConfig: {temperature: 0.2, maxOutputTokens: 5000}
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error?.message || `Gemini 请求失败（${response.status}）`);
+    return (data.candidates?.[0]?.content?.parts || []).map(item => item.text || "").join("").trim();
+  }
+  throw new Error("未知 AI 供应商。");
+}
+
+async function aiNotesDay(day, lessons, apiKey, provider, model, extraPrompt) {
   const prompt = `${DEFAULT_PROMPT}
 
 标题请写为：“${state.metadata.course || "课堂"} · ${day} 课堂笔记”。
 
 ${extraPrompt ? `用户追加要求：\n${extraPrompt}\n\n` : ""}课堂材料：
 ${aiSource(lessons)}`;
-  const response = await fetch("https://api.deepseek.com/chat/completions", {
-    method: "POST",
-    headers: {"Content-Type": "application/json", "Authorization": `Bearer ${apiKey}`},
-    body: JSON.stringify({
-      model: "deepseek-v4-flash",
-      messages: [{role: "user", content: prompt}],
-      temperature: 0.2,
-      max_tokens: 5000
-    })
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error?.message || `DeepSeek 请求失败（${response.status}）`);
-  return data.choices?.[0]?.message?.content?.trim() || "";
+  return completeWithAI(prompt, apiKey, provider, model);
 }
 
 function crc32(bytes) {
@@ -278,13 +391,15 @@ async function downloadZip(filename, files) {
   }
 }
 
-async function collect(replays) {
+async function collect(replays, options = {}) {
   const lessons = [];
   const failures = [];
   for (let i = 0; i < replays.length; i++) {
     const replay = replays[i];
-    progress(i, replays.length, `读取 ${replay.time}`);
-    log(`读取 ${replay.time}…`);
+    if (!options.silent) {
+      progress(i, replays.length, `读取 ${replay.time}`);
+      log(`读取 ${replay.time}…`);
+    }
     try {
       const reply = await send({action: "extractCaptions", time: replay.time});
       if (reply?.error) throw new Error(reply.error);
@@ -294,17 +409,35 @@ async function collect(replays) {
       lessons.push(reply);
     } catch (error) {
       failures.push(`${replay.time}：${error.message}`);
-      log(`跳过 ${replay.time}：${error.message}`);
+      if (!options.silent) log(`跳过 ${replay.time}：${error.message}`);
     }
-    progress(i + 1, replays.length, `已读取 ${i + 1} / ${replays.length}`);
+    if (!options.silent) progress(i + 1, replays.length, `已读取 ${i + 1} / ${replays.length}`);
   }
   return {lessons, failures};
+}
+
+async function testAIConnection({quiet = false} = {}) {
+  const {id, label} = currentProvider();
+  const apiKey = $("#api-key").value.trim();
+  const model = $("#model").value.trim();
+  if (!apiKey) throw new Error("请先填写 API Key。");
+  if (!model) throw new Error("请先填写模型名。");
+  if (!quiet) $("#speed-result").textContent = "测速中…";
+  const started = performance.now();
+  const text = await completeWithAI("请只回复：ok", apiKey, id, model);
+  const elapsed = Math.round(performance.now() - started);
+  const result = `${label} / ${model} 可用，${elapsed} ms`;
+  $("#speed-result").textContent = result;
+  if (!quiet) log(`测速成功：${result}`);
+  return {elapsed, text};
 }
 
 async function run(days) {
   if (state.running) return;
   const useAI = $("#use-ai").checked;
+  const {id: provider, label: providerLabel} = currentProvider();
   const apiKey = $("#api-key").value.trim();
+  const model = $("#model").value.trim();
   const extraPrompt = $("#custom-prompt").value.trim();
   if (!days.size) {
     log("请至少勾选一个日期。");
@@ -312,12 +445,21 @@ async function run(days) {
   }
   if (useAI && !apiKey) {
     $("#api-key").focus();
-    log("请先填写并保存 DeepSeek API Key。");
+    log("请先填写并保存 API Key。");
+    return;
+  }
+  if (useAI && !model) {
+    $("#model").focus();
+    log("请先填写模型名。");
     return;
   }
   setRunning(true);
   $("#log").textContent = "开始处理。请保持课程页面打开，不要刷新或手动切换回放。";
   try {
+    if (useAI && $("#speed-before-run").checked) {
+      log("导出前自动测速…");
+      await testAIConnection({quiet: true});
+    }
     state.tab = await courseTab();
     const selected = state.replays.filter(item => days.has(item.time.slice(0, 10)));
     const {lessons, failures} = await collect(selected);
@@ -325,16 +467,16 @@ async function run(days) {
     const folder = safeName(state.metadata.course || "SJTU课堂概要");
     const files = [];
     const index = [`# ${state.metadata.course || "课堂"} · 导出索引`, "", `共导出 ${grouped.size} 个上课日、${lessons.length} 段回放。`, ""];
+    if (useAI) index.push(`AI：${providerLabel} / ${model}`, "");
 
     let dayIndex = 0;
     for (const day of [...grouped.keys()].sort()) {
       const dayLessons = grouped.get(day);
       progress(dayIndex, grouped.size, `整理 ${day}`);
-      files.push({name: `概要/${day}-平台概要.md`, text: summaryMarkdown(day, dayLessons)});
       files.push({name: `原字幕/${day}-原字幕.md`, text: captionsMarkdown(day, dayLessons)});
       if (useAI) {
-        log(`DeepSeek 正在总结 ${day}…`);
-        const notes = await deepSeekDay(day, dayLessons, apiKey, extraPrompt);
+        log(`${providerLabel} 正在整理 ${day}…`);
+        const notes = await aiNotesDay(day, dayLessons, apiKey, provider, model, extraPrompt);
         files.push({name: `AI整理/${day}-课堂笔记.md`, text: notes});
       }
       index.push(`- ${day}：${dayLessons.length} 段回放`);
@@ -362,12 +504,42 @@ $("#use-ai").addEventListener("change", () => {
   $("#key-row").classList.toggle("hidden", !$("#use-ai").checked);
   $("#prompt-row").classList.toggle("hidden", !$("#use-ai").checked);
 });
+$("#provider").addEventListener("change", async () => {
+  const {id} = currentProvider();
+  await chrome.storage.local.set({aiProvider: id});
+  await loadProviderSettings();
+});
+$("#model").addEventListener("change", async () => {
+  const {id} = currentProvider();
+  const saved = await chrome.storage.local.get("aiModels");
+  await chrome.storage.local.set({aiModels: {...(saved.aiModels || {}), [id]: $("#model").value.trim()}});
+});
 $("#save-key").addEventListener("click", async () => {
   const key = $("#api-key").value.trim();
+  const {id, label, storageKey} = currentProvider();
+  const model = $("#model").value.trim();
   if (!key) return log("API Key 为空，未保存。");
-  await chrome.storage.local.set({deepseekApiKey: key, deepseekApiKeySavedAt: new Date().toISOString()});
+  const saved = await chrome.storage.local.get(["aiKeys", "aiModels"]);
+  await chrome.storage.local.set({
+    aiProvider: id,
+    aiKeys: {...(saved.aiKeys || {}), [id]: key},
+    aiModels: {...(saved.aiModels || {}), [id]: model},
+    [storageKey]: key,
+    [`${storageKey}SavedAt`]: new Date().toISOString()
+  });
   $("#key-note").textContent = "已长期保存到本机 Chrome 扩展存储。更新扩展不会清除，卸载扩展会删除。";
-  log("DeepSeek API Key 已长期保存。");
+  log(`${label} API Key 已长期保存。`);
+});
+$("#test-ai").addEventListener("click", async () => {
+  try {
+    $("#test-ai").disabled = true;
+    await testAIConnection();
+  } catch (error) {
+    $("#speed-result").textContent = `测速失败：${error.message}`;
+    log(`测速失败：${error.message}`);
+  } finally {
+    $("#test-ai").disabled = false;
+  }
 });
 $("#export-selected").addEventListener("click", () => run(selectedDays()));
 $("#select-all-days").addEventListener("click", () => {
@@ -380,12 +552,28 @@ $("#custom-prompt").addEventListener("input", () => {
   chrome.storage.local.set({customPrompt: $("#custom-prompt").value});
 });
 
-chrome.storage.local.get(["deepseekApiKey", "deepseekApiKeySavedAt", "customPrompt"]).then(({deepseekApiKey, deepseekApiKeySavedAt, customPrompt}) => {
-  if (deepseekApiKey) {
-    $("#api-key").value = deepseekApiKey;
-    const saved = deepseekApiKeySavedAt ? new Date(deepseekApiKeySavedAt).toLocaleString("zh-CN", {hour12: false}) : "此前";
-    $("#key-note").textContent = `已读取长期保存的 API Key（保存时间：${saved}）。`;
-  }
+async function loadProviderSettings() {
+  const {id, defaultModel, keyPlaceholder, storageKey} = currentProvider();
+  const saved = await chrome.storage.local.get(["aiKeys", "aiModels", storageKey, `${storageKey}SavedAt`]);
+  const key = saved.aiKeys?.[id] || saved[storageKey] || "";
+  const model = saved.aiModels?.[id] || defaultModel;
+  $("#api-key").value = key;
+  $("#api-key").placeholder = keyPlaceholder;
+  $("#model").value = model;
+  const savedAt = saved[`${storageKey}SavedAt`];
+  $("#key-note").textContent = key
+    ? `已读取长期保存的 API Key（保存时间：${savedAt ? new Date(savedAt).toLocaleString("zh-CN", {hour12: false}) : "此前"}）。`
+    : "密钥会长期保存在本机 Chrome 扩展存储中；更新扩展不会清除，卸载扩展会删除。";
+  $("#speed-result").textContent = "尚未测速";
+}
+
+chrome.storage.local.get(["aiProvider", "customPrompt", "speedBeforeRun"]).then(async ({aiProvider, customPrompt, speedBeforeRun}) => {
+  if (aiProvider && PROVIDERS[aiProvider]) $("#provider").value = aiProvider;
+  if (speedBeforeRun === false) $("#speed-before-run").checked = false;
   if (customPrompt) $("#custom-prompt").value = customPrompt;
+  await loadProviderSettings();
+});
+$("#speed-before-run").addEventListener("change", () => {
+  chrome.storage.local.set({speedBeforeRun: $("#speed-before-run").checked});
 });
 loadCourse();
