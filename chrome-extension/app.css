@@ -31,9 +31,6 @@ button:disabled { cursor: default; opacity: .48; }
 .switch span::after { content: ""; display: block; width: 16px; height: 16px; border-radius: 50%; background: white; transition: .2s; box-shadow: 0 1px 4px #0003; }
 .switch input:checked + span { background: #1766df; }
 .switch input:checked + span::after { transform: translateX(16px); }
-.switch.mini span { width: 34px; height: 20px; padding: 2px; }
-.switch.mini span::after { width: 16px; height: 16px; }
-.switch.mini input:checked + span::after { transform: translateX(14px); }
 .field { display: block; margin-top: 22px; }
 .field > span { display: block; margin-bottom: 8px; color: #3b4961; font-size: 13px; font-weight: 650; }
 .key-line input { flex: 1; }

@@ -1,5 +1,13 @@
 const $ = selector => document.querySelector(selector);
-const state = {tab: null, replays: [], metadata: {}, running: false, previewCache: new Map(), previewTimer: null};
+const state = {
+  tab: null,
+  replays: [],
+  metadata: {},
+  running: false,
+  previewCache: new Map(),
+  previewShowTimer: null,
+  previewHideTimer: null
+};
 
 const PROVIDERS = {
   deepseek: {
@@ -144,7 +152,7 @@ function renderDayChecks(grouped) {
     const text = document.createElement("span");
     text.textContent = `${day}（${grouped.get(day).length} 段）`;
     label.addEventListener("mouseenter", () => schedulePreview(day, label));
-    label.addEventListener("mouseleave", hidePreview);
+    label.addEventListener("mouseleave", hidePreviewSoon);
     label.append(input, text);
     list.append(label);
   }
@@ -191,6 +199,8 @@ function ensurePreviewBox() {
     box = document.createElement("div");
     box.id = "preview-box";
     box.className = "preview-box hidden";
+    box.addEventListener("mouseenter", () => clearTimeout(state.previewHideTimer));
+    box.addEventListener("mouseleave", hidePreviewSoon);
     document.body.append(box);
   }
   return box;
@@ -206,14 +216,22 @@ function showPreview(anchor, text) {
 }
 
 function hidePreview() {
-  clearTimeout(state.previewTimer);
+  clearTimeout(state.previewShowTimer);
+  clearTimeout(state.previewHideTimer);
   const box = $("#preview-box");
   if (box) box.classList.add("hidden");
 }
 
+function hidePreviewSoon() {
+  clearTimeout(state.previewShowTimer);
+  clearTimeout(state.previewHideTimer);
+  state.previewHideTimer = setTimeout(hidePreview, 380);
+}
+
 function schedulePreview(day, anchor) {
-  clearTimeout(state.previewTimer);
-  state.previewTimer = setTimeout(() => showDayPreview(day, anchor), 450);
+  clearTimeout(state.previewShowTimer);
+  clearTimeout(state.previewHideTimer);
+  state.previewShowTimer = setTimeout(() => showDayPreview(day, anchor), 650);
 }
 
 async function showDayPreview(day, anchor) {
@@ -456,10 +474,7 @@ async function run(days) {
   setRunning(true);
   $("#log").textContent = "开始处理。请保持课程页面打开，不要刷新或手动切换回放。";
   try {
-    if (useAI && $("#speed-before-run").checked) {
-      log("导出前自动测速…");
-      await testAIConnection({quiet: true});
-    }
+    if (useAI) await testAIConnection({quiet: true});
     state.tab = await courseTab();
     const selected = state.replays.filter(item => days.has(item.time.slice(0, 10)));
     const {lessons, failures} = await collect(selected);
@@ -527,8 +542,7 @@ $("#save-key").addEventListener("click", async () => {
     [storageKey]: key,
     [`${storageKey}SavedAt`]: new Date().toISOString()
   });
-  $("#key-note").textContent = "已长期保存到本机 Chrome 扩展存储。更新扩展不会清除，卸载扩展会删除。";
-  log(`${label} API Key 已长期保存。`);
+  log(`${label} API Key 已保存。`);
 });
 $("#test-ai").addEventListener("click", async () => {
   try {
@@ -560,20 +574,12 @@ async function loadProviderSettings() {
   $("#api-key").value = key;
   $("#api-key").placeholder = keyPlaceholder;
   $("#model").value = model;
-  const savedAt = saved[`${storageKey}SavedAt`];
-  $("#key-note").textContent = key
-    ? `已读取长期保存的 API Key（保存时间：${savedAt ? new Date(savedAt).toLocaleString("zh-CN", {hour12: false}) : "此前"}）。`
-    : "密钥会长期保存在本机 Chrome 扩展存储中；更新扩展不会清除，卸载扩展会删除。";
   $("#speed-result").textContent = "尚未测速";
 }
 
-chrome.storage.local.get(["aiProvider", "customPrompt", "speedBeforeRun"]).then(async ({aiProvider, customPrompt, speedBeforeRun}) => {
+chrome.storage.local.get(["aiProvider", "customPrompt"]).then(async ({aiProvider, customPrompt}) => {
   if (aiProvider && PROVIDERS[aiProvider]) $("#provider").value = aiProvider;
-  if (speedBeforeRun === false) $("#speed-before-run").checked = false;
   if (customPrompt) $("#custom-prompt").value = customPrompt;
   await loadProviderSettings();
-});
-$("#speed-before-run").addEventListener("change", () => {
-  chrome.storage.local.set({speedBeforeRun: $("#speed-before-run").checked});
 });
 loadCourse();
