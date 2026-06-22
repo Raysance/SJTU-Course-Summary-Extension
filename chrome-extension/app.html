@@ -12,7 +12,7 @@
       <div class="mark">S</div>
       <div>
         <h1>SJTU 课堂概要导出</h1>
-        <p>平台字幕直接读取 · 按天合并 · DeepSeek 考试笔记</p>
+        <p>平台字幕直接读取 · 按天合并 · DeepSeek 课堂笔记</p>
       </div>
       <span class="local">纯扩展运行</span>
     </header>
@@ -50,7 +50,17 @@
 
       <label class="field compact">
         <span>导出范围</span>
-        <select id="scope" disabled><option>正在读取日期…</option></select>
+        <div class="date-toolbar">
+          <button id="select-all-days" class="secondary" disabled>全选</button>
+          <button id="clear-days" class="secondary" disabled>清空</button>
+        </div>
+        <div id="day-list" class="day-list muted">正在读取日期…</div>
+      </label>
+
+      <label class="field" id="prompt-row">
+        <span>追加 Prompt（可选）</span>
+        <textarea id="custom-prompt" rows="4" placeholder="例如：请更偏向期末复习；请保留关键概念英文名；请按老师强调频次排序。"></textarea>
+        <small>这里只会追加到默认课堂笔记整理 prompt 后面，不会覆盖默认要求。</small>
       </label>
       <div class="actions">
         <button id="export-selected" class="primary" disabled>导出所选范围</button>

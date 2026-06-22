@@ -1,6 +1,17 @@
 const $ = selector => document.querySelector(selector);
 const state = {tab: null, replays: [], metadata: {}, running: false};
 
+const DEFAULT_PROMPT = `你是课堂笔记整理助手。请根据课堂概要、章节导航和字幕，整理一份适合复习与回顾的中文 Markdown 课堂笔记。
+
+要求：
+1. 使用“总 / 分”的结构呈现。
+2. “总”部分概括本次课的主题、主线、核心结论和学习重点。
+3. “分”部分按知识模块整理，每个模块包含关键概念、老师强调点、逻辑关系、例子或易混点。
+4. 不需要输出原字幕，不要逐句转写。
+5. 不需要强调页码整理；只有材料中明确出现页码时才可自然提及。
+6. 表达简明、层次清楚，适合直接作为课堂笔记保存。
+7. 只依据提供的课堂材料整理，不补充材料外的信息。`;
+
 function log(message) {
   const now = new Date().toLocaleTimeString("zh-CN", {hour12: false});
   $("#log").textContent += `\n[${now}] ${message}`;
@@ -11,7 +22,9 @@ function setRunning(running) {
   state.running = running;
   $("#export-selected").disabled = running || !state.replays.length;
   $("#refresh").disabled = running;
-  $("#scope").disabled = running || !state.replays.length;
+  $("#select-all-days").disabled = running || !state.replays.length;
+  $("#clear-days").disabled = running || !state.replays.length;
+  document.querySelectorAll(".day-check").forEach(input => input.disabled = running);
 }
 
 function progress(done, total, title) {
@@ -22,6 +35,15 @@ function progress(done, total, title) {
 
 function safeName(value) {
   return (value || "课堂概要").replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim();
+}
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function timestampName() {
+  const date = new Date();
+  return `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}-${pad2(date.getHours())}${pad2(date.getMinutes())}${pad2(date.getSeconds())}`;
 }
 
 async function courseTab() {
@@ -52,15 +74,12 @@ async function loadCourse() {
     const grouped = groupReplays(state.replays);
     $("#course").textContent = state.metadata.course || "SJTU 课堂视频";
     $("#meta").textContent = `${state.metadata.teacher || "教师信息未显示"} · ${state.replays.length} 个回放 · ${grouped.size} 个上课日`;
-    $("#scope").innerHTML = [
-      `<option value="all">全选：导出所有日期（${state.replays.length} 段）</option>`,
-      ...[...grouped.keys()].sort().reverse()
-        .map(day => `<option value="${day}">${day}（${grouped.get(day).length} 段）</option>`)
-    ].join("");
-    $("#scope").disabled = false;
+    renderDayChecks(grouped);
     $("#export-selected").disabled = false;
+    $("#select-all-days").disabled = false;
+    $("#clear-days").disabled = false;
     progress(0, state.replays.length, "准备就绪");
-    $("#log").textContent = "课程读取成功。可在“导出范围”中选择全选或某一天。";
+    $("#log").textContent = "课程读取成功。可勾选一个或多个日期，也可以全选。";
   } catch (error) {
     $("#course").textContent = "未连接到课程页面";
     $("#meta").textContent = error.message;
@@ -78,13 +97,35 @@ function groupReplays(replays) {
   return groups;
 }
 
-function rawDayMarkdown(day, lessons) {
+function renderDayChecks(grouped) {
+  const list = $("#day-list");
+  list.classList.remove("muted");
+  list.textContent = "";
+  for (const day of [...grouped.keys()].sort().reverse()) {
+    const label = document.createElement("label");
+    label.className = "day-item";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.className = "day-check";
+    input.value = day;
+    input.checked = true;
+    const text = document.createElement("span");
+    text.textContent = `${day}（${grouped.get(day).length} 段）`;
+    label.append(input, text);
+    list.append(label);
+  }
+}
+
+function selectedDays() {
+  return new Set([...document.querySelectorAll(".day-check:checked")].map(input => input.value));
+}
+
+function summaryMarkdown(day, lessons) {
   const lines = [
-    `# ${state.metadata.course || "课堂"} · ${day}`,
+    `# ${state.metadata.course || "课堂"} · ${day} 平台概要`,
     "",
     `> 教师：${state.metadata.teacher || "未显示"}  `,
     `> 当日回放：${lessons.length} 段  `,
-    "> 来源：SJTU 视频平台 AI 字幕、概要和章节导航",
     ""
   ];
   lessons.forEach((lesson, index) => {
@@ -98,11 +139,26 @@ function rawDayMarkdown(day, lessons) {
       });
       lines.push("");
     }
+  });
+  return lines.join("\n");
+}
+
+function captionsMarkdown(day, lessons) {
+  const lines = [
+    `# ${state.metadata.course || "课堂"} · ${day} 原字幕`,
+    "",
+    `> 教师：${state.metadata.teacher || "未显示"}  `,
+    `> 当日回放：${lessons.length} 段  `,
+    ""
+  ];
+  lessons.forEach((lesson, index) => {
+    lines.push(`## 第 ${index + 1} 段 · ${lesson.time.slice(11, 16)}`, "");
     if (lesson.captions?.length) {
-      lines.push("<details>", "<summary>展开平台字幕</summary>", "");
       lesson.captions.forEach(item => lines.push(`- \`${item.start}\` ${item.text}`));
-      lines.push("", "</details>", "");
+    } else {
+      lines.push("本段未读取到字幕。");
     }
+    lines.push("");
   });
   return lines.join("\n");
 }
@@ -119,18 +175,12 @@ function aiSource(lessons) {
   return sections.slice(0, 120000);
 }
 
-async function deepSeekDay(day, lessons, apiKey) {
-  const prompt = `你是考试笔记整理助手。以下是同一天的多段课堂平台概要、章节导航和字幕。这节课以教师带学生在教材上划考试笔记为主。
+async function deepSeekDay(day, lessons, apiKey, extraPrompt) {
+  const prompt = `${DEFAULT_PROMPT}
 
-请生成简明、准确的中文 Markdown，要求：
-1. 同一天所有回放合并整理，去重，不按视频机械重复。
-2. 按“考试安排与答题”“分章考点”“易错陷阱”“考前最小清单”组织。
-3. 每个考点必须写成“页码｜批注｜要点”。页码不确定时明确写“页码待核对”，严禁编造。
-4. 批注要短，适合直接写在教材边栏；要点突出关键词、判断关系和答题表述。
-5. 只依据提供内容，不补充课堂未出现的信息。
-6. 开头标题写“${state.metadata.course || "课堂"} · ${day} 考试要点”。
+标题请写为：“${state.metadata.course || "课堂"} · ${day} 课堂笔记”。
 
-课堂材料：
+${extraPrompt ? `用户追加要求：\n${extraPrompt}\n\n` : ""}课堂材料：
 ${aiSource(lessons)}`;
   const response = await fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
@@ -147,8 +197,79 @@ ${aiSource(lessons)}`;
   return data.choices?.[0]?.message?.content?.trim() || "";
 }
 
-async function downloadText(filename, text) {
-  const blob = new Blob([text], {type: "text/markdown;charset=utf-8"});
+function crc32(bytes) {
+  let table = crc32.table;
+  if (!table) {
+    table = crc32.table = Array.from({length: 256}, (_, index) => {
+      let value = index;
+      for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+      return value >>> 0;
+    });
+  }
+  let value = 0xffffffff;
+  for (const byte of bytes) value = table[(value ^ byte) & 0xff] ^ (value >>> 8);
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function dosDateTime(date = new Date()) {
+  const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const day = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return {time, day};
+}
+
+function u16(value) {
+  return new Uint8Array([value & 0xff, (value >>> 8) & 0xff]);
+}
+
+function u32(value) {
+  return new Uint8Array([value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff]);
+}
+
+function concatBytes(parts) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+function zipBlob(files) {
+  const encoder = new TextEncoder();
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  const {time, day} = dosDateTime();
+  for (const file of files) {
+    const name = encoder.encode(file.name);
+    const data = encoder.encode(file.text);
+    const crc = crc32(data);
+    const local = concatBytes([
+      u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(time), u16(day),
+      u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), name, data
+    ]);
+    const central = concatBytes([
+      u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(time), u16(day),
+      u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), u16(0),
+      u16(0), u16(0), u32(0), u32(offset), name
+    ]);
+    localParts.push(local);
+    centralParts.push(central);
+    offset += local.length;
+  }
+  const centralStart = offset;
+  const central = concatBytes(centralParts);
+  const end = concatBytes([
+    u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+    u32(central.length), u32(centralStart), u16(0)
+  ]);
+  return new Blob([concatBytes([...localParts, central, end])], {type: "application/zip"});
+}
+
+async function downloadZip(filename, files) {
+  const blob = zipBlob(files);
   const url = URL.createObjectURL(blob);
   try {
     await chrome.downloads.download({url, filename, conflictAction: "uniquify", saveAs: false});
@@ -184,6 +305,11 @@ async function run(days) {
   if (state.running) return;
   const useAI = $("#use-ai").checked;
   const apiKey = $("#api-key").value.trim();
+  const extraPrompt = $("#custom-prompt").value.trim();
+  if (!days.size) {
+    log("请至少勾选一个日期。");
+    return;
+  }
   if (useAI && !apiKey) {
     $("#api-key").focus();
     log("请先填写并保存 DeepSeek API Key。");
@@ -197,31 +323,32 @@ async function run(days) {
     const {lessons, failures} = await collect(selected);
     const grouped = groupReplays(lessons);
     const folder = safeName(state.metadata.course || "SJTU课堂概要");
-    const index = [`# ${state.metadata.course || "课堂"} · 课程概要索引`, "", `共导出 ${grouped.size} 个上课日、${lessons.length} 段回放。`, ""];
+    const files = [];
+    const index = [`# ${state.metadata.course || "课堂"} · 导出索引`, "", `共导出 ${grouped.size} 个上课日、${lessons.length} 段回放。`, ""];
 
     let dayIndex = 0;
     for (const day of [...grouped.keys()].sort()) {
       const dayLessons = grouped.get(day);
       progress(dayIndex, grouped.size, `整理 ${day}`);
-      let markdown = rawDayMarkdown(day, dayLessons);
+      files.push({name: `概要/${day}-平台概要.md`, text: summaryMarkdown(day, dayLessons)});
+      files.push({name: `原字幕/${day}-原字幕.md`, text: captionsMarkdown(day, dayLessons)});
       if (useAI) {
         log(`DeepSeek 正在总结 ${day}…`);
-        const summary = await deepSeekDay(day, dayLessons, apiKey);
-        markdown = `${summary}\n\n---\n\n${markdown}`;
+        const notes = await deepSeekDay(day, dayLessons, apiKey, extraPrompt);
+        files.push({name: `AI整理/${day}-课堂笔记.md`, text: notes});
       }
-      const name = `${folder}/${day}-${useAI ? "考试要点与课堂概要" : "课堂概要"}.md`;
-      await downloadText(name, markdown);
       index.push(`- ${day}：${dayLessons.length} 段回放`);
       dayIndex++;
-      progress(dayIndex, grouped.size, `已导出 ${day}`);
+      progress(dayIndex, grouped.size, `已整理 ${day}`);
     }
     if (failures.length) {
       index.push("", "## 未成功读取", "", ...failures.map(item => `- ${item}`));
     }
-    await downloadText(`${folder}/课程概要索引.md`, index.join("\n"));
+    files.unshift({name: "导出索引.md", text: index.join("\n")});
+    await downloadZip(`${folder}-${timestampName()}.zip`, files);
     progress(grouped.size, grouped.size, "全部完成");
-    log(`完成：导出 ${grouped.size} 个日期，成功读取 ${lessons.length} 段。`);
-    if (failures.length) log(`另有 ${failures.length} 段未成功，详见课程概要索引。`);
+    log(`完成：已打包 ZIP，包含 ${grouped.size} 个日期、${files.length} 个文件。`);
+    if (failures.length) log(`另有 ${failures.length} 段未成功，详见导出索引。`);
   } catch (error) {
     progress(0, 0, "处理失败");
     log(`失败：${error.message}`);
@@ -231,7 +358,10 @@ async function run(days) {
 }
 
 $("#refresh").addEventListener("click", loadCourse);
-$("#use-ai").addEventListener("change", () => $("#key-row").classList.toggle("hidden", !$("#use-ai").checked));
+$("#use-ai").addEventListener("change", () => {
+  $("#key-row").classList.toggle("hidden", !$("#use-ai").checked);
+  $("#prompt-row").classList.toggle("hidden", !$("#use-ai").checked);
+});
 $("#save-key").addEventListener("click", async () => {
   const key = $("#api-key").value.trim();
   if (!key) return log("API Key 为空，未保存。");
@@ -239,19 +369,23 @@ $("#save-key").addEventListener("click", async () => {
   $("#key-note").textContent = "已长期保存到本机 Chrome 扩展存储。更新扩展不会清除，卸载扩展会删除。";
   log("DeepSeek API Key 已长期保存。");
 });
-$("#export-selected").addEventListener("click", () => {
-  const value = $("#scope").value;
-  const days = value === "all"
-    ? new Set(state.replays.map(item => item.time.slice(0, 10)))
-    : new Set([value]);
-  run(days);
+$("#export-selected").addEventListener("click", () => run(selectedDays()));
+$("#select-all-days").addEventListener("click", () => {
+  document.querySelectorAll(".day-check").forEach(input => input.checked = true);
+});
+$("#clear-days").addEventListener("click", () => {
+  document.querySelectorAll(".day-check").forEach(input => input.checked = false);
+});
+$("#custom-prompt").addEventListener("input", () => {
+  chrome.storage.local.set({customPrompt: $("#custom-prompt").value});
 });
 
-chrome.storage.local.get(["deepseekApiKey", "deepseekApiKeySavedAt"]).then(({deepseekApiKey, deepseekApiKeySavedAt}) => {
+chrome.storage.local.get(["deepseekApiKey", "deepseekApiKeySavedAt", "customPrompt"]).then(({deepseekApiKey, deepseekApiKeySavedAt, customPrompt}) => {
   if (deepseekApiKey) {
     $("#api-key").value = deepseekApiKey;
     const saved = deepseekApiKeySavedAt ? new Date(deepseekApiKeySavedAt).toLocaleString("zh-CN", {hour12: false}) : "此前";
     $("#key-note").textContent = `已读取长期保存的 API Key（保存时间：${saved}）。`;
   }
+  if (customPrompt) $("#custom-prompt").value = customPrompt;
 });
 loadCourse();

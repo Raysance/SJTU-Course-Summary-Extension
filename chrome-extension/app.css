@@ -20,7 +20,7 @@ header p { margin-top: 4px; }
 .eyebrow { display: block; margin-bottom: 7px; color: #4773bb; font-size: 11px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 h2 { font-size: 18px; }
 .course-card p { margin-top: 7px; }
-button, input, select { font: inherit; }
+button, input, textarea { font: inherit; }
 button { border: 0; border-radius: 10px; padding: 10px 15px; font-weight: 650; cursor: pointer; }
 button:disabled { cursor: default; opacity: .48; }
 .primary { color: white; background: #1766df; box-shadow: 0 7px 16px #1766df2e; }
@@ -34,12 +34,19 @@ button:disabled { cursor: default; opacity: .48; }
 .field { display: block; margin-top: 22px; }
 .field > span { display: block; margin-bottom: 8px; color: #3b4961; font-size: 13px; font-weight: 650; }
 .key-line input { flex: 1; }
-input, select { width: 100%; border: 1px solid #d6deea; border-radius: 10px; padding: 11px 12px; color: #1a2842; background: #fbfcfe; outline: none; }
-input:focus, select:focus { border-color: #4e86dc; box-shadow: 0 0 0 3px #3e7cdb1a; }
+input, textarea { width: 100%; border: 1px solid #d6deea; border-radius: 10px; padding: 11px 12px; color: #1a2842; background: #fbfcfe; outline: none; }
+textarea { resize: vertical; min-height: 92px; line-height: 1.55; }
+input:focus, textarea:focus { border-color: #4e86dc; box-shadow: 0 0 0 3px #3e7cdb1a; }
 small { display: block; margin-top: 7px; line-height: 1.4; }
 .actions { margin-top: 18px; }
 .actions .primary { flex: 1; padding: 13px; }
 .compact { margin-top: 16px; }
+.date-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+.date-toolbar button { padding: 8px 12px; }
+.day-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; max-height: 210px; overflow: auto; padding: 10px; border: 1px solid #d6deea; border-radius: 12px; background: #fbfcfe; }
+.day-list.muted { display: block; color: #7b879a; }
+.day-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #e1e7f0; border-radius: 10px; background: white; color: #26354f; font-size: 13px; }
+.day-item input { width: auto; }
 .progress-head { justify-content: space-between; }
 #progress-count { color: #71809a; font-variant-numeric: tabular-nums; }
 .track { height: 8px; margin: 13px 0 16px; overflow: hidden; border-radius: 999px; background: #edf1f7; }
