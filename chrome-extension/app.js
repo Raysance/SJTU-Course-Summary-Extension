@@ -515,8 +515,10 @@ async function run(days) {
 }
 
 $("#refresh").addEventListener("click", loadCourse);
+$("#settings-toggle").addEventListener("click", () => {
+  $("#settings-panel").classList.toggle("hidden");
+});
 $("#use-ai").addEventListener("change", () => {
-  $("#key-row").classList.toggle("hidden", !$("#use-ai").checked);
   $("#prompt-row").classList.toggle("hidden", !$("#use-ai").checked);
 });
 $("#provider").addEventListener("change", async () => {

@@ -12,9 +12,8 @@
       <div class="mark">S</div>
       <div>
         <h1>SJTU 课堂概要导出</h1>
-        <p>平台字幕直接读取 · 按天合并 · DeepSeek 课堂笔记</p>
       </div>
-      <span class="local">纯扩展运行</span>
+      <button id="settings-toggle" class="secondary">AI 设置</button>
     </header>
 
     <section class="card course-card">
@@ -26,11 +25,11 @@
       <button id="refresh" class="secondary">重新读取</button>
     </section>
 
-    <section class="card">
+    <section id="settings-panel" class="card settings-panel hidden">
       <div class="section-title">
         <div>
-          <span class="eyebrow">导出设置</span>
-          <h2>一天的课程合并为一个文件</h2>
+          <span class="eyebrow">AI 设置</span>
+          <h2>模型与密钥</h2>
         </div>
         <label class="switch">
           <input id="use-ai" type="checkbox" checked>
@@ -59,13 +58,22 @@
         <span class="field-subtitle">API Key</span>
         <div class="key-line">
           <input id="api-key" type="password" autocomplete="off" placeholder="sk-…">
-          <button id="save-key" class="secondary">保存</button>
         </div>
-        <div class="test-line">
+        <div class="config-actions">
+          <button id="save-key" class="secondary">保存</button>
           <button id="test-ai" class="secondary">测速</button>
           <small id="speed-result">尚未测速</small>
         </div>
       </label>
+    </section>
+
+    <section class="card">
+      <div class="section-title">
+        <div>
+          <span class="eyebrow">导出设置</span>
+          <h2>选择日期并导出</h2>
+        </div>
+      </div>
 
       <label class="field compact">
         <span>导出范围</span>
@@ -79,7 +87,6 @@
       <label class="field" id="prompt-row">
         <span>追加 Prompt（可选）</span>
         <textarea id="custom-prompt" rows="4" placeholder="例如：请更偏向期末复习；请保留关键概念英文名；请按老师强调频次排序。"></textarea>
-        <small>这里只会追加到默认课堂笔记整理 prompt 后面，不会覆盖默认要求。</small>
       </label>
       <div class="actions">
         <button id="export-selected" class="primary" disabled>导出所选范围</button>
@@ -95,7 +102,6 @@
       <pre id="log">打开课程视频页后，点击“重新读取”。</pre>
     </section>
 
-    <footer>不会读取 Cookie、Local Storage、tokenId 或账号密码。请仅导出你有权访问的课程内容。</footer>
   </main>
   <script src="app.js"></script>
 </body>
