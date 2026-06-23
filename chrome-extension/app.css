@@ -30,6 +30,15 @@ button:disabled { cursor: default; opacity: .45; }
 .secondary { color: #315a99; background: #edf3fc; }
 .icon-button { width: 42px; height: 42px; display: inline-grid; place-items: center; padding: 0; }
 .icon-button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon-button .soft { stroke: #7aa7ee; }
+.icon-button .strong { stroke: #1766df; }
+.icon-button .icon-refresh { width: 23px; height: 23px; }
+.icon-refresh .soft, .icon-refresh .strong { stroke: url(#refreshGradient); }
+.icon-button .icon-check-all, .icon-button .icon-clear { width: 22px; height: 22px; }
+.icon-check-all .soft { stroke: #7ed6a5; }
+.icon-check-all .strong { stroke: #1f9d55; }
+.icon-clear .soft { stroke: #f0a6a6; }
+.icon-clear .strong { stroke: #e55353; }
 .switch { display: flex; align-items: center; gap: 9px; color: #485773; font-size: 13px; cursor: pointer; }
 .switch input { position: absolute; opacity: 0; }
 .switch span { width: 38px; height: 22px; padding: 3px; border-radius: 999px; background: #bec7d5; transition: .2s; }
