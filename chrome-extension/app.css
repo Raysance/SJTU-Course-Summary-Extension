@@ -18,6 +18,7 @@ small, .course-card p { color: #6c7890; }
 .course-card { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
 .course-card > div { flex: 1; }
 .course-card p { margin-top: 7px; }
+.course-select { margin-top: 12px; max-width: 560px; }
 .workspace { display: grid; grid-template-columns: minmax(340px, 1fr) minmax(360px, .95fr); gap: 16px; align-items: stretch; }
 .pane { min-height: 455px; display: flex; flex-direction: column; }
 .section-title, .progress-head, .actions, .config-actions { display: flex; align-items: center; gap: 10px; }
@@ -39,6 +40,17 @@ button:disabled { cursor: default; opacity: .45; }
 .icon-check-all .strong { stroke: #1f9d55; }
 .icon-clear .soft { stroke: #f0a6a6; }
 .icon-clear .strong { stroke: #e55353; }
+.icon-settings .soft { stroke: #8db5f2; }
+.icon-settings .strong { stroke: #3f7ee8; }
+.icon-start .soft { stroke: #9fc0ff; }
+.icon-start .strong { stroke: #fff; }
+.icon-download .soft { stroke: #acd0ff; }
+.icon-download .strong { stroke: #fff; }
+.icon-save .soft { stroke: #8db5f2; }
+.icon-save .strong { stroke: #2f80ed; }
+.icon-speed .soft { stroke: #f2c56b; }
+.icon-speed .strong { stroke: #f2994a; }
+.icon-close .strong { stroke: #e15b64; }
 .switch { display: flex; align-items: center; gap: 9px; color: #485773; font-size: 13px; cursor: pointer; }
 .switch input { position: absolute; opacity: 0; }
 .switch span { width: 38px; height: 22px; padding: 3px; border-radius: 999px; background: #bec7d5; transition: .2s; }
