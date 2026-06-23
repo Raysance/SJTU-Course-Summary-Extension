@@ -6,7 +6,8 @@ const state = {
   running: false,
   previewCache: new Map(),
   previewShowTimer: null,
-  previewHideTimer: null
+  previewHideTimer: null,
+  pendingDownload: null
 };
 
 const PROVIDERS = {
@@ -399,12 +400,26 @@ function zipBlob(files) {
   return new Blob([concatBytes([...localParts, central, end])], {type: "application/zip"});
 }
 
-async function downloadZip(filename, files) {
+function prepareZipDownload(filename, files) {
+  if (state.pendingDownload?.url) URL.revokeObjectURL(state.pendingDownload.url);
   const blob = zipBlob(files);
-  const url = URL.createObjectURL(blob);
+  state.pendingDownload = {url: URL.createObjectURL(blob), filename};
+  $("#download-zip").classList.remove("hidden");
+}
+
+async function downloadPreparedZip() {
+  if (!state.pendingDownload) return;
+  const {url, filename} = state.pendingDownload;
   try {
-    await chrome.downloads.download({url, filename, conflictAction: "uniquify", saveAs: false});
+    await chrome.downloads.download({
+      url,
+      filename,
+      conflictAction: "uniquify",
+      saveAs: false
+    });
   } finally {
+    state.pendingDownload = null;
+    $("#download-zip").classList.add("hidden");
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
 }
@@ -472,6 +487,9 @@ async function run(days) {
     return;
   }
   setRunning(true);
+  $("#download-zip").classList.add("hidden");
+  if (state.pendingDownload?.url) URL.revokeObjectURL(state.pendingDownload.url);
+  state.pendingDownload = null;
   $("#log").textContent = "开始处理。请保持课程页面打开，不要刷新或手动切换回放。";
   try {
     if (useAI) await testAIConnection({quiet: true});
@@ -502,9 +520,9 @@ async function run(days) {
       index.push("", "## 未成功读取", "", ...failures.map(item => `- ${item}`));
     }
     files.unshift({name: "导出索引.md", text: index.join("\n")});
-    await downloadZip(`${folder}-${timestampName()}.zip`, files);
+    prepareZipDownload(`${folder}-${timestampName()}.zip`, files);
     progress(grouped.size, grouped.size, "全部完成");
-    log(`完成：已打包 ZIP，包含 ${grouped.size} 个日期、${files.length} 个文件。`);
+    log(`完成：已生成 ZIP，包含 ${grouped.size} 个日期、${files.length} 个文件。点击下载按钮保存。`);
     if (failures.length) log(`另有 ${failures.length} 段未成功，详见导出索引。`);
   } catch (error) {
     progress(0, 0, "处理失败");
@@ -516,10 +534,20 @@ async function run(days) {
 
 $("#refresh").addEventListener("click", loadCourse);
 $("#settings-toggle").addEventListener("click", () => {
-  $("#settings-panel").classList.toggle("hidden");
+  $("#settings-backdrop").classList.remove("hidden");
+});
+$("#settings-close").addEventListener("click", () => {
+  $("#settings-backdrop").classList.add("hidden");
+});
+$("#settings-backdrop").addEventListener("click", event => {
+  if (event.target.id === "settings-backdrop") $("#settings-backdrop").classList.add("hidden");
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") $("#settings-backdrop").classList.add("hidden");
 });
 $("#use-ai").addEventListener("change", () => {
   $("#prompt-row").classList.toggle("hidden", !$("#use-ai").checked);
+  $("#key-row").classList.toggle("hidden", !$("#use-ai").checked);
 });
 $("#provider").addEventListener("change", async () => {
   const {id} = currentProvider();
@@ -558,6 +586,7 @@ $("#test-ai").addEventListener("click", async () => {
   }
 });
 $("#export-selected").addEventListener("click", () => run(selectedDays()));
+$("#download-zip").addEventListener("click", downloadPreparedZip);
 $("#select-all-days").addEventListener("click", () => {
   document.querySelectorAll(".day-check").forEach(input => input.checked = true);
 });
