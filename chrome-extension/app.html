@@ -63,10 +63,20 @@
         </div>
         <div id="day-list" class="day-list muted">正在读取日期…</div>
 
-        <label class="field" id="prompt-row">
-          <span>追加 Prompt</span>
-          <textarea id="custom-prompt" rows="5" placeholder="例如：请更偏向期末复习；请保留关键概念英文名；请按老师强调频次排序。"></textarea>
-        </label>
+        <div id="prompt-row">
+          <label class="field">
+            <span>默认模板</span>
+            <select id="prompt-template">
+              <option value="notes">课堂笔记</option>
+              <option value="review">期末复习</option>
+              <option value="latex">LaTeX 笔记</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>追加 Prompt</span>
+            <textarea id="custom-prompt" rows="5" placeholder="可写入额外要求，或粘贴 LaTeX 参考模板。"></textarea>
+          </label>
+        </div>
 
         <div class="actions">
           <button id="export-selected" class="icon-button primary" aria-label="开始导出" title="开始导出" disabled>
