@@ -39,64 +39,6 @@ function pageMetadata() {
   };
 }
 
-function cleanText(value) {
-  return (value || "").replace(/\s+/g, " ").trim();
-}
-
-function absoluteUrl(href, base = location.href) {
-  try {
-    return new URL(href, base).href;
-  } catch (_) {
-    return "";
-  }
-}
-
-function canvasCourseId(url) {
-  return absoluteUrl(url).match(/\/courses\/(\d+)/)?.[1] || "";
-}
-
-function canvasCoursesFromPage() {
-  const courses = new Map();
-  for (const anchor of document.querySelectorAll("a[href*='/courses/']")) {
-    const url = absoluteUrl(anchor.getAttribute("href")).replace(/[#?].*$/, "");
-    const id = canvasCourseId(url);
-    if (!id || /\/courses\/\d+\//.test(url)) continue;
-    const row = anchor.closest("tr");
-    const cells = row ? [...row.querySelectorAll("td")].map(cell => cleanText(cell.textContent)) : [];
-    const course = cleanText(anchor.textContent) || `课程 ${id}`;
-    const term = cells[3] || "";
-    const role = cells[4] || "";
-    const published = cells[5] || "";
-    const item = {id, course, term, role, published, url: `https://oc.sjtu.edu.cn/courses/${id}`};
-    if (!courses.has(id) || item.course.length > courses.get(id).course.length) courses.set(id, item);
-  }
-  return [...courses.values()];
-}
-
-function canvasVideoLinkFromPage(course) {
-  const candidates = [...document.querySelectorAll("a[href]")].map(anchor => {
-    const text = cleanText(`${anchor.textContent} ${anchor.getAttribute("title") || ""} ${anchor.getAttribute("aria-label") || ""}`);
-    const url = absoluteUrl(anchor.getAttribute("href")).replace(/#.*$/, "");
-    return {text, url};
-  }).filter(item => {
-    const isClassVideo = /课堂\s*视频|课堂视频|class\s*video/i.test(item.text);
-    const isLaunchUrl = /\/courses\/\d+\/external_tools\/\d+/.test(item.url) || item.url.includes("v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/");
-    return isClassVideo && isLaunchUrl;
-  }).sort((a, b) => {
-    const score = value => (/new/i.test(value.text) || /新版/.test(value.text) ? 0 : 1);
-    return score(a) - score(b);
-  });
-  const selected = candidates[0];
-  if (!selected) return null;
-  const courseId = canvasCourseId(selected.url) || canvasCourseId(location.href);
-  return {
-    url: selected.url,
-    course: course || cleanText(document.querySelector("nav[aria-label='breadcrumbs'] a[href*='/courses/']")?.textContent) || document.title,
-    courseId,
-    label: selected.text || "课堂视频new"
-  };
-}
-
 function waitForSelectedReplay(selected, previousCaption, allowSameCaption, sendResponse, deadline, acceptAfter) {
   const card = document.getElementById(selected.id);
   const captions = captionRows();
@@ -128,15 +70,6 @@ function waitForSelectedReplay(selected, previousCaption, allowSameCaption, send
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === "extractCanvasCourses") {
-    sendResponse({courses: canvasCoursesFromPage(), url: location.href, title: document.title});
-    return false;
-  }
-  if (message.action === "extractCanvasVideoLink") {
-    sendResponse({videoLink: canvasVideoLinkFromPage(message.course), url: location.href, title: document.title});
-    return false;
-  }
-
   const replays = replayRows();
   if (!replays.length) return false;
 
