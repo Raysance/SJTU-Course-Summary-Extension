@@ -151,71 +151,64 @@ function canvasCourseId(url) {
   return absoluteUrl(url).match(/\/courses\/(\d+)/)?.[1] || "";
 }
 
-function parseHtml(html) {
-  return new DOMParser().parseFromString(html, "text/html");
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function courseTitleFromDoc(doc) {
-  return cleanText(
-    doc.querySelector(".course-title")?.textContent ||
-    doc.querySelector("[data-testid='course-title']")?.textContent ||
-    doc.querySelector("h1")?.textContent ||
-    doc.title
-  );
-}
-
-function collectCanvasCourses(doc, baseUrl) {
-  const courses = new Map();
-  for (const anchor of doc.querySelectorAll("a[href*='/courses/']")) {
-    const url = absoluteUrl(anchor.getAttribute("href"), baseUrl).replace(/[#?].*$/, "");
-    const id = canvasCourseId(url);
-    if (!id || /\/courses\/\d+\/(assignments|discussion_topics|files|grades|modules|pages|quizzes|users|external_tools)\b/.test(url)) continue;
-    const course = cleanText(anchor.textContent) || `课程 ${id}`;
-    if (!courses.has(id) || course.length > courses.get(id).course.length) {
-      courses.set(id, {id, course, url: `https://oc.sjtu.edu.cn/courses/${id}`});
+async function waitForTabReply(tabId, message, isReady, timeout = 20000) {
+  const deadline = Date.now() + timeout;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    try {
+      const reply = await sendToTab(tabId, message);
+      if (isReady(reply)) return reply;
+      if (reply?.error) lastError = reply.error;
+    } catch (error) {
+      lastError = error.message;
     }
+    await wait(500);
   }
-  return [...courses.values()];
+  throw new Error(lastError || "页面加载超时。");
 }
 
-function collectCanvasVideoLinks(doc, baseUrl, fallbackCourse = "") {
-  const links = new Map();
-  for (const anchor of doc.querySelectorAll("a[href]")) {
-    const text = cleanText(`${anchor.textContent} ${anchor.getAttribute("title") || ""} ${anchor.getAttribute("aria-label") || ""}`);
-    const url = absoluteUrl(anchor.getAttribute("href"), baseUrl);
-    const isClassVideo = /课堂\s*视频|课堂视频|class\s*video/i.test(text);
-    const isLaunchUrl = /\/external_tools\/\d+/.test(url) || url.includes("v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/");
-    if (!isClassVideo || !isLaunchUrl) continue;
-    const courseId = canvasCourseId(url) || canvasCourseId(baseUrl);
-    const course = fallbackCourse || courseTitleFromDoc(doc) || (courseId ? `课程 ${courseId}` : "课堂视频");
-    const cleanUrl = url.replace(/#.*$/, "");
-    links.set(cleanUrl, {url: cleanUrl, course, courseId, label: text || "课堂视频 new"});
-  }
-  return [...links.values()];
-}
-
-async function fetchCanvasDoc(url) {
-  const response = await fetch(url, {credentials: "include"});
-  if (!response.ok) throw new Error(`读取 Canvas 失败（${response.status}）`);
-  return parseHtml(await response.text());
+async function navigateDiscoveryTab(tabId, url) {
+  await chrome.tabs.update(tabId, {url});
+  await wait(700);
 }
 
 async function discoverCanvasVideoLinks() {
-  const courseDoc = await fetchCanvasDoc("https://oc.sjtu.edu.cn/courses");
-  const courses = new Map(collectCanvasCourses(courseDoc, "https://oc.sjtu.edu.cn/courses").map(course => [course.id, course]));
+  const tab = await chrome.tabs.create({url: "https://oc.sjtu.edu.cn/courses", active: false});
   const videos = new Map();
-  const addVideo = item => {
-    if (item?.url) videos.set(item.url.replace(/[#?].*$/, ""), item);
-  };
+  try {
+    log("正在读取 Canvas 全部课程列表…");
+    const courseReply = await waitForTabReply(tab.id, {action: "extractCanvasCourses"}, reply => Array.isArray(reply?.courses), 30000);
+    const courses = (courseReply.courses || []).filter(course => course.id && course.url);
+    if (!courses.length) throw new Error("没有在 Canvas“所有课程”页面识别到课程。");
 
-  collectCanvasVideoLinks(courseDoc, "https://oc.sjtu.edu.cn/courses").forEach(addVideo);
-  for (const course of [...courses.values()].slice(0, 80)) {
-    try {
-      const doc = await fetchCanvasDoc(course.url);
-      collectCanvasVideoLinks(doc, course.url, course.course).forEach(addVideo);
-    } catch (_) {
-      // 部分历史课程不可访问时跳过，不影响其他课程识别。
+    log(`已识别 ${courses.length} 门课程，正在查找课堂视频入口…`);
+    let checked = 0;
+    for (const course of courses.slice(0, 120)) {
+      checked++;
+      if (checked === 1 || checked % 10 === 0) progress(checked, courses.length, `识别课程 ${checked}/${courses.length}`);
+      try {
+        await navigateDiscoveryTab(tab.id, course.url);
+        const reply = await waitForTabReply(
+          tab.id,
+          {action: "extractCanvasVideoLink", course: course.course},
+          result => result && "videoLink" in result,
+          12000
+        );
+        const link = reply.videoLink;
+        if (link?.url) {
+          const key = link.url.replace(/[#?].*$/, "");
+          videos.set(key, {...link, course: link.course || course.course, courseId: link.courseId || course.id});
+        }
+      } catch (_) {
+        // 个别课程打不开或没有课堂视频入口时跳过。
+      }
     }
+  } finally {
+    chrome.tabs.remove(tab.id).catch(() => {});
   }
   return [...videos.values()].sort((a, b) => a.course.localeCompare(b.course, "zh-Hans-CN"));
 }
@@ -293,10 +286,6 @@ function renderCoursePages() {
   });
   select.value = state.selectedPageKey || "";
   select.classList.toggle("hidden", state.coursePages.length <= 1);
-}
-
-function wait(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function resolveCoursePage(page) {
