@@ -43,6 +43,8 @@ const PROMPT_TEMPLATES = {
   notes: {
     label: "课堂笔记",
     extension: "md",
+    maxOutputTokens: 5000,
+    continuationRounds: 1,
     prompt: `你是课堂笔记整理助手。请根据课堂概要、章节导航和字幕，整理一份适合复习与回顾的中文 Markdown 课堂笔记。
 
 要求：
@@ -58,6 +60,8 @@ const PROMPT_TEMPLATES = {
   review: {
     label: "复习资料",
     extension: "md",
+    maxOutputTokens: 6000,
+    continuationRounds: 1,
     prompt: `这节课是给期末考试划重点。请根据课堂概要、章节导航和字幕，生成一份可直接用于期末复习的中文 Markdown 复习资料。
 
 要求：
@@ -72,6 +76,8 @@ const PROMPT_TEMPLATES = {
   latex: {
     label: "LaTeX 笔记",
     extension: "tex",
+    maxOutputTokens: 8000,
+    continuationRounds: 4,
     prompt: `请根据课堂概要、章节导航、字幕以及用户追加 Prompt 中可能提供的参考模板，生成一份完整的 LaTeX 笔记源码。不要使用 Markdown 代码块包裹输出，只输出可保存为 .tex 的内容。
 
 通用要求：
@@ -354,55 +360,88 @@ function aiSource(lessons) {
   return sections.slice(0, 120000);
 }
 
-async function completeWithAI(prompt, apiKey, provider, model) {
+const CONTINUE_PROMPT = "请从上一条内容的中断处继续输出，不要重复已经输出的内容，也不要补充解释。";
+
+async function completeWithAI(prompt, apiKey, provider, model, options = {}) {
+  const maxTokens = options.maxTokens || 5000;
+  const maxRounds = Math.max(1, options.maxRounds || 1);
   if (provider === "deepseek" || provider === "openai") {
     const base = provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com";
-    const response = await fetch(`${base}/chat/completions`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json", "Authorization": `Bearer ${apiKey}`},
-      body: JSON.stringify({
-        model,
-        messages: [{role: "user", content: prompt}],
-        temperature: 0.2,
-        max_tokens: 5000
-      })
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error?.message || `${PROVIDERS[provider].label} 请求失败（${response.status}）`);
-    return data.choices?.[0]?.message?.content?.trim() || "";
+    const messages = [{role: "user", content: prompt}];
+    const chunks = [];
+    for (let round = 0; round < maxRounds; round++) {
+      const response = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "Authorization": `Bearer ${apiKey}`},
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.2,
+          max_tokens: maxTokens
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error?.message || `${PROVIDERS[provider].label} 请求失败（${response.status}）`);
+      const choice = data.choices?.[0] || {};
+      const text = choice.message?.content || "";
+      if (text) chunks.push(text);
+      if (!["length", "max_tokens"].includes(choice.finish_reason) || round === maxRounds - 1) break;
+      messages.push({role: "assistant", content: text});
+      messages.push({role: "user", content: CONTINUE_PROMPT});
+    }
+    return chunks.join("").trim();
   }
   if (provider === "anthropic") {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 5000,
-        temperature: 0.2,
-        messages: [{role: "user", content: prompt}]
-      })
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error?.message || `Claude 请求失败（${response.status}）`);
-    return (data.content || []).map(item => item.text || "").join("").trim();
+    const messages = [{role: "user", content: prompt}];
+    const chunks = [];
+    for (let round = 0; round < maxRounds; round++) {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          temperature: 0.2,
+          messages
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error?.message || `Claude 请求失败（${response.status}）`);
+      const text = (data.content || []).map(item => item.text || "").join("");
+      if (text) chunks.push(text);
+      if (data.stop_reason !== "max_tokens" || round === maxRounds - 1) break;
+      messages.push({role: "assistant", content: text});
+      messages.push({role: "user", content: CONTINUE_PROMPT});
+    }
+    return chunks.join("").trim();
   }
   if (provider === "gemini") {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        contents: [{parts: [{text: prompt}]}],
-        generationConfig: {temperature: 0.2, maxOutputTokens: 5000}
-      })
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error?.message || `Gemini 请求失败（${response.status}）`);
-    return (data.candidates?.[0]?.content?.parts || []).map(item => item.text || "").join("").trim();
+    const contents = [{role: "user", parts: [{text: prompt}]}];
+    const chunks = [];
+    for (let round = 0; round < maxRounds; round++) {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          contents,
+          generationConfig: {temperature: 0.2, maxOutputTokens: maxTokens}
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error?.message || `Gemini 请求失败（${response.status}）`);
+      const candidate = data.candidates?.[0] || {};
+      const text = (candidate.content?.parts || []).map(item => item.text || "").join("");
+      if (text) chunks.push(text);
+      if (candidate.finishReason !== "MAX_TOKENS" || round === maxRounds - 1) break;
+      contents.push({role: "model", parts: [{text}]});
+      contents.push({role: "user", parts: [{text: CONTINUE_PROMPT}]});
+    }
+    return chunks.join("").trim();
   }
   throw new Error("未知 AI 供应商。");
 }
@@ -418,7 +457,10 @@ async function aiNotesDay(day, lessons, apiKey, provider, model, extraPrompt, te
 
 ${extraPrompt ? `用户追加要求：\n${extraPrompt}\n\n` : ""}课堂材料：
 ${aiSource(lessons)}`;
-  return completeWithAI(prompt, apiKey, provider, model);
+  return completeWithAI(prompt, apiKey, provider, model, {
+    maxTokens: template.maxOutputTokens,
+    maxRounds: template.continuationRounds
+  });
 }
 
 function crc32(bytes) {
