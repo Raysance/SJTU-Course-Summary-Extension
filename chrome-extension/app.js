@@ -2,7 +2,7 @@ const $ = selector => document.querySelector(selector);
 const state = {
   tab: null,
   coursePages: [],
-  selectedTabId: null,
+  selectedPageKey: null,
   replays: [],
   metadata: {},
   running: false,
@@ -127,6 +127,99 @@ function safeName(value) {
   return (value || "课堂概要").replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim();
 }
 
+function cleanText(value) {
+  return (value || "").replace(/\s+/g, " ").trim();
+}
+
+function absoluteUrl(href, base = "https://oc.sjtu.edu.cn/") {
+  try {
+    return new URL(href, base).href;
+  } catch (_) {
+    return "";
+  }
+}
+
+function stableKey(value) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index++) {
+    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function canvasCourseId(url) {
+  return absoluteUrl(url).match(/\/courses\/(\d+)/)?.[1] || "";
+}
+
+function parseHtml(html) {
+  return new DOMParser().parseFromString(html, "text/html");
+}
+
+function courseTitleFromDoc(doc) {
+  return cleanText(
+    doc.querySelector(".course-title")?.textContent ||
+    doc.querySelector("[data-testid='course-title']")?.textContent ||
+    doc.querySelector("h1")?.textContent ||
+    doc.title
+  );
+}
+
+function collectCanvasCourses(doc, baseUrl) {
+  const courses = new Map();
+  for (const anchor of doc.querySelectorAll("a[href*='/courses/']")) {
+    const url = absoluteUrl(anchor.getAttribute("href"), baseUrl).replace(/[#?].*$/, "");
+    const id = canvasCourseId(url);
+    if (!id || /\/courses\/\d+\/(assignments|discussion_topics|files|grades|modules|pages|quizzes|users|external_tools)\b/.test(url)) continue;
+    const course = cleanText(anchor.textContent) || `课程 ${id}`;
+    if (!courses.has(id) || course.length > courses.get(id).course.length) {
+      courses.set(id, {id, course, url: `https://oc.sjtu.edu.cn/courses/${id}`});
+    }
+  }
+  return [...courses.values()];
+}
+
+function collectCanvasVideoLinks(doc, baseUrl, fallbackCourse = "") {
+  const links = new Map();
+  for (const anchor of doc.querySelectorAll("a[href]")) {
+    const text = cleanText(`${anchor.textContent} ${anchor.getAttribute("title") || ""} ${anchor.getAttribute("aria-label") || ""}`);
+    const url = absoluteUrl(anchor.getAttribute("href"), baseUrl);
+    const isClassVideo = /课堂\s*视频|课堂视频|class\s*video/i.test(text);
+    const isLaunchUrl = /\/external_tools\/\d+/.test(url) || url.includes("v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/");
+    if (!isClassVideo || !isLaunchUrl) continue;
+    const courseId = canvasCourseId(url) || canvasCourseId(baseUrl);
+    const course = fallbackCourse || courseTitleFromDoc(doc) || (courseId ? `课程 ${courseId}` : "课堂视频");
+    const cleanUrl = url.replace(/#.*$/, "");
+    links.set(cleanUrl, {url: cleanUrl, course, courseId, label: text || "课堂视频 new"});
+  }
+  return [...links.values()];
+}
+
+async function fetchCanvasDoc(url) {
+  const response = await fetch(url, {credentials: "include"});
+  if (!response.ok) throw new Error(`读取 Canvas 失败（${response.status}）`);
+  return parseHtml(await response.text());
+}
+
+async function discoverCanvasVideoLinks() {
+  const courseDoc = await fetchCanvasDoc("https://oc.sjtu.edu.cn/courses");
+  const courses = new Map(collectCanvasCourses(courseDoc, "https://oc.sjtu.edu.cn/courses").map(course => [course.id, course]));
+  const videos = new Map();
+  const addVideo = item => {
+    if (item?.url) videos.set(item.url.replace(/[#?].*$/, ""), item);
+  };
+
+  collectCanvasVideoLinks(courseDoc, "https://oc.sjtu.edu.cn/courses").forEach(addVideo);
+  for (const course of [...courses.values()].slice(0, 80)) {
+    try {
+      const doc = await fetchCanvasDoc(course.url);
+      collectCanvasVideoLinks(doc, course.url, course.course).forEach(addVideo);
+    } catch (_) {
+      // 部分历史课程不可访问时跳过，不影响其他课程识别。
+    }
+  }
+  return [...videos.values()].sort((a, b) => a.course.localeCompare(b.course, "zh-Hans-CN"));
+}
+
 function pad2(value) {
   return String(value).padStart(2, "0");
 }
@@ -137,10 +230,11 @@ function timestampName() {
 }
 
 async function courseTab() {
-  if (state.selectedTabId) return {id: state.selectedTabId};
+  if (state.tab?.id) return state.tab;
   await discoverCoursePages();
-  if (!state.selectedTabId) throw new Error("未找到课堂视频页，请先在 Chrome 中打开并登录课程。");
-  return {id: state.selectedTabId};
+  const page = state.coursePages.find(item => item.key === state.selectedPageKey);
+  if (!page) throw new Error("未找到课堂视频入口，请确认已经登录 oc.sjtu.edu.cn。");
+  return (await resolveCoursePage(page)).tab;
 }
 
 async function sendToTab(tabId, message) {
@@ -158,39 +252,77 @@ async function send(message) {
 }
 
 async function discoverCoursePages() {
-  const tabs = await chrome.tabs.query({url: "https://v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/*"});
-  const sorted = [...tabs].sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
-  const pages = [];
-  for (const tab of sorted) {
-    try {
-      const reply = await sendToTab(tab.id, {action: "listReplays"});
-      if (reply?.replays?.length) pages.push({tab, replays: reply.replays, metadata: reply.metadata || {}});
-    } catch (_) {
-      pages.push({tab, replays: [], metadata: {course: tab.title || "课堂视频"}});
-    }
-  }
+  const links = await discoverCanvasVideoLinks();
+  const pages = links.map((link, index) => ({
+    kind: "canvas",
+    key: `canvas-${link.courseId || index}-${stableKey(link.url)}`,
+    canvasUrl: link.url,
+    replays: [],
+    metadata: {course: link.course, teacher: "", entryLabel: link.label},
+    tab: null
+  }));
   state.coursePages = pages;
   if (!pages.length) {
-    state.selectedTabId = null;
+    state.selectedPageKey = null;
     return;
   }
-  if (!pages.some(page => page.tab.id === state.selectedTabId)) state.selectedTabId = pages[0].tab.id;
+  if (!pages.some(page => page.key === state.selectedPageKey)) {
+    state.selectedPageKey = pages.length === 1 ? pages[0].key : null;
+  }
 }
 
 function renderCoursePages() {
   const select = $("#course-pages");
   select.textContent = "";
+  if (!state.selectedPageKey && state.coursePages.length > 1) {
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "选择课程";
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    select.append(placeholder);
+  }
   state.coursePages.forEach((page, index) => {
     const option = document.createElement("option");
-    option.value = String(page.tab.id);
-    const course = page.metadata.course || page.tab.title || `课堂页面 ${index + 1}`;
+    option.value = page.key;
+    const course = page.metadata.course || page.tab?.title || `课堂页面 ${index + 1}`;
     const teacher = page.metadata.teacher ? ` · ${page.metadata.teacher}` : "";
     const count = page.replays?.length ? ` · ${page.replays.length} 回放` : "";
     option.textContent = `${course}${teacher}${count}`;
     select.append(option);
   });
-  select.value = String(state.selectedTabId || "");
+  select.value = state.selectedPageKey || "";
   select.classList.toggle("hidden", state.coursePages.length <= 1);
+}
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function resolveCoursePage(page) {
+  if (page.tab?.id && page.replays?.length) return page;
+  log(`正在打开 ${page.metadata.course || "课程"} 的课堂视频入口…`);
+  const tab = await chrome.tabs.create({url: page.canvasUrl, active: false});
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) {
+    const current = await chrome.tabs.get(tab.id).catch(() => null);
+    if (!current) throw new Error("课堂视频标签页已关闭。");
+    if (current.url?.includes("v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/")) {
+      try {
+        const reply = await sendToTab(current.id, {action: "listReplays"});
+        if (reply?.replays?.length) {
+          page.tab = current;
+          page.replays = reply.replays;
+          page.metadata = {...page.metadata, ...(reply.metadata || {})};
+          return page;
+        }
+      } catch (_) {
+        // 视频页脚本可能还没挂上，稍后重试。
+      }
+    }
+    await wait(1000);
+  }
+  throw new Error("已找到课堂视频入口，但视频页未在 45 秒内加载出回放列表。");
 }
 
 async function loadCourse() {
@@ -199,9 +331,27 @@ async function loadCourse() {
   try {
     await discoverCoursePages();
     renderCoursePages();
-    const page = state.coursePages.find(item => item.tab.id === state.selectedTabId);
-    if (!page) throw new Error("未找到课堂视频页，请先在 Chrome 中打开并登录课程。");
-    if (!page.replays?.length) throw new Error("页面尚未加载出回放列表，请刷新课程页后重试。");
+    if (!state.selectedPageKey && state.coursePages.length > 1) {
+      const count = state.coursePages.length;
+      $("#course").textContent = "请选择课程";
+      $("#meta").textContent = `已识别 ${count} 个课堂视频入口。`;
+      state.tab = null;
+      state.replays = [];
+      state.metadata = {};
+      state.previewCache.clear();
+      renderDayChecks(new Map());
+      $("#export-selected").disabled = true;
+      $("#select-all-days").disabled = true;
+      $("#clear-days").disabled = true;
+      progress(0, count, "等待选择课程");
+      $("#log").textContent = "已完成全量识别，请在顶部选择要导出的课程。";
+      return;
+    }
+    const page = state.coursePages.find(item => item.key === state.selectedPageKey);
+    if (!page) throw new Error("未找到课堂视频入口，请确认已经登录 oc.sjtu.edu.cn。");
+    await resolveCoursePage(page);
+    renderCoursePages();
+    if (!page.replays?.length) throw new Error("页面尚未加载出回放列表，请稍后重试。");
     state.tab = page.tab;
     state.replays = page.replays;
     state.metadata = page.metadata || {};
@@ -625,7 +775,7 @@ async function run(days) {
   $("#download-zip").classList.add("hidden");
   if (state.pendingDownload?.url) URL.revokeObjectURL(state.pendingDownload.url);
   state.pendingDownload = null;
-  $("#log").textContent = "开始处理。请保持课程页面打开，不要刷新或手动切换回放。";
+  $("#log").textContent = "开始处理。请保持自动打开的课堂视频页打开，不要刷新或手动切换回放。";
   try {
     if (useAI) await testAIConnection({quiet: true});
     state.tab = await courseTab();
@@ -669,7 +819,10 @@ async function run(days) {
 
 $("#refresh").addEventListener("click", loadCourse);
 $("#course-pages").addEventListener("change", async () => {
-  state.selectedTabId = Number($("#course-pages").value);
+  if (!$("#course-pages").value) return;
+  state.selectedPageKey = $("#course-pages").value;
+  state.tab = null;
+  state.replays = [];
   await loadCourse();
 });
 $("#settings-toggle").addEventListener("click", () => {

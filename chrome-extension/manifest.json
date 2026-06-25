@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "SJTU 课堂概要导出",
-  "version": "4.6.0",
-  "description": "从已登录的 SJTU Canvas 课堂视频页读取平台字幕，按日期整理并用多种 AI 服务生成课堂笔记。",
+  "version": "4.7.0",
+  "description": "从已登录的 SJTU Canvas 自动识别课堂视频并读取平台字幕，按日期整理并用多种 AI 服务生成课堂笔记。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3qFoNPOk6fIVUob0QjuzCITbla2/6OkZ0A4SXwxzS6dE/iOj7Tus9PJTOlQgrvk/3eHJfQN3UeMezpII709rxJr/OdF0L8Ty2L5K8tlVEIHppVII3YAH2lpXG8gZLIinVxF66AQrg3HzdaHL90QJzB31hj2NhzI1DrNEg+dzlFjWm+M0rheaQi9MJXvq+G6p0fNsoQp9GqZy6miHw/SwUh4rDqR+Z3PZntMZ89ajQTT3XnkqNK9CjsCTK0FunEijto7amkm0B30wRxXFETIg5b5I5kb/leu2CVv6pjIi3nEgChe0oX5/Iphut2Hi5hv23iPqtz4qylrr246fR3sHIQIDAQAB",
   "permissions": ["downloads", "storage", "tabs", "scripting"],
   "host_permissions": [
+    "https://oc.sjtu.edu.cn/*",
     "https://v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/*",
     "https://api.deepseek.com/*",
     "https://api.openai.com/*",
@@ -19,7 +20,9 @@
     "service_worker": "background.js"
   },
   "content_scripts": [{
-    "matches": ["https://v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/*"],
+    "matches": [
+      "https://v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/*"
+    ],
     "js": ["content.js"],
     "run_at": "document_idle"
   }]
