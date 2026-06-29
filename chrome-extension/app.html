@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SJTU 课堂概要导出</title>
+  <title>SJTU 课程资料助手</title>
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
   <main>
     <header>
       <div class="mark">S</div>
-      <h1>SJTU 课堂概要导出</h1>
+      <h1>SJTU 课程资料助手</h1>
       <button id="settings-toggle" class="icon-button secondary" aria-label="AI 设置" title="AI 设置">
         <svg class="icon-settings" viewBox="0 0 24 24" aria-hidden="true"><path class="soft" d="M5 7h14M5 17h14"/><path class="strong" d="M9 7a2 2 0 1 0-4 0 2 2 0 0 0 4 0ZM19 17a2 2 0 1 0-4 0 2 2 0 0 0 4 0Z"/></svg>
       </button>
@@ -23,7 +23,7 @@
         <p id="meta">请确认 Chrome 已登录 oc.sjtu.edu.cn。</p>
         <select id="course-pages" class="course-select hidden" aria-label="选择课程页面"></select>
       </div>
-      <button id="refresh" class="icon-button secondary" aria-label="重新读取" title="重新读取">
+      <button id="refresh" class="icon-button secondary" aria-label="重新识别课程" title="重新识别课程">
         <svg class="icon-refresh" viewBox="0 0 24 24" aria-hidden="true">
           <defs>
             <linearGradient id="refreshGradient" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
@@ -39,62 +39,117 @@
       </button>
     </section>
 
-    <section class="workspace">
-      <section class="card pane">
-        <div class="section-title">
-          <div>
-            <span class="eyebrow">导出范围</span>
-            <h2>选择日期</h2>
-          </div>
-          <div class="date-toolbar">
-            <button id="select-all-days" class="icon-button secondary" aria-label="全选" title="全选" disabled>
-              <svg class="icon-check-all" viewBox="0 0 24 24" aria-hidden="true">
-                <path class="soft" d="m4.5 12.8 3.4 3.4 7-8"/>
-                <path class="strong" d="m9.4 12.5 3.8 3.8 7-8.5"/>
-              </svg>
-            </button>
-            <button id="clear-days" class="icon-button secondary" aria-label="清空" title="清空" disabled>
-              <svg class="icon-clear" viewBox="0 0 24 24" aria-hidden="true">
-                <path class="soft" d="M8.2 8.2a5.4 5.4 0 0 1 7.6 7.6M15.8 8.2a5.4 5.4 0 0 0-7.6 7.6"/>
-                <path class="strong" d="M6 18 18 6"/>
-              </svg>
-            </button>
-          </div>
+    <section class="card files-card">
+      <div class="section-title">
+        <div>
+          <span class="eyebrow">课程文件</span>
+          <h2>批量下载</h2>
+          <p id="files-meta">选择课程后自动读取文件。</p>
         </div>
-        <div id="day-list" class="day-list muted">正在读取日期…</div>
-
-        <div id="prompt-row">
-          <label class="field">
-            <span>默认模板</span>
-            <select id="prompt-template">
-              <option value="notes">默认</option>
-              <option value="review">期末复习</option>
-              <option value="latex">LaTeX 笔记</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>追加 Prompt</span>
-            <textarea id="custom-prompt" rows="5" placeholder="可写入额外要求，或粘贴 LaTeX 参考模板。"></textarea>
-          </label>
-        </div>
-
-        <div class="actions">
-          <button id="export-selected" class="icon-button primary" aria-label="开始导出" title="开始导出" disabled>
-            <svg class="icon-start" viewBox="0 0 24 24" aria-hidden="true"><path class="soft" d="M5 12h10"/><path class="strong" d="m13 6 6 6-6 6"/></svg>
+        <div class="file-toolbar">
+          <button id="refresh-files" class="icon-button secondary" aria-label="重新读取文件" title="重新读取文件" disabled>
+            <svg class="icon-refresh" viewBox="0 0 24 24" aria-hidden="true">
+              <path class="soft" d="M6.4 8.3A7.2 7.2 0 0 1 18 7.4"/>
+              <path class="strong" d="M18.2 4.7v3.8h-3.8"/>
+              <path class="soft" d="M17.6 15.7A7.2 7.2 0 0 1 6 16.6"/>
+              <path class="strong" d="M5.8 19.3v-3.8h3.8"/>
+            </svg>
+          </button>
+          <button id="select-all-files" class="icon-button secondary" aria-label="全选可见文件" title="全选可见文件" disabled>
+            <svg class="icon-check-all" viewBox="0 0 24 24" aria-hidden="true">
+              <path class="soft" d="m4.5 12.8 3.4 3.4 7-8"/>
+              <path class="strong" d="m9.4 12.5 3.8 3.8 7-8.5"/>
+            </svg>
+          </button>
+          <button id="clear-files" class="icon-button secondary" aria-label="清空文件选择" title="清空文件选择" disabled>
+            <svg class="icon-clear" viewBox="0 0 24 24" aria-hidden="true">
+              <path class="soft" d="M8.2 8.2a5.4 5.4 0 0 1 7.6 7.6M15.8 8.2a5.4 5.4 0 0 0-7.6 7.6"/>
+              <path class="strong" d="M6 18 18 6"/>
+            </svg>
+          </button>
+          <button id="download-files" class="icon-button primary" aria-label="打包下载所选文件" title="打包下载所选文件" disabled>
+            <svg class="icon-download" viewBox="0 0 24 24" aria-hidden="true"><path class="soft" d="M12 3v12"/><path class="strong" d="m7 10 5 5 5-5"/><path class="soft" d="M5 19h14"/></svg>
           </button>
         </div>
-      </section>
+      </div>
+      <input id="file-search" type="search" placeholder="搜索文件名或文件夹" autocomplete="off" disabled>
+      <div id="file-list" class="file-list muted">等待课程文件。</div>
+    </section>
 
-      <section class="card pane">
-        <div class="progress-head">
-          <strong id="progress-title">准备就绪</strong>
-          <span id="progress-count">0 / 0</span>
+    <section class="card video-card">
+      <div class="section-title">
+        <div>
+          <span class="eyebrow">课堂视频</span>
+          <h2>概要生成</h2>
+          <p id="video-meta">选择课程后读取回放日期。</p>
         </div>
-        <div class="track"><div id="bar"></div></div>
-        <pre id="log">打开课程视频页后，点击重新读取。</pre>
-        <button id="download-zip" class="icon-button primary hidden" aria-label="下载 ZIP" title="下载 ZIP">
-          <svg class="icon-download" viewBox="0 0 24 24" aria-hidden="true"><path class="soft" d="M12 3v12"/><path class="strong" d="m7 10 5 5 5-5"/><path class="soft" d="M5 19h14"/></svg>
+        <button id="refresh-video" class="icon-button secondary" aria-label="重新读取视频" title="重新读取视频" disabled>
+          <svg class="icon-refresh" viewBox="0 0 24 24" aria-hidden="true">
+            <path class="soft" d="M6.4 8.3A7.2 7.2 0 0 1 18 7.4"/>
+            <path class="strong" d="M18.2 4.7v3.8h-3.8"/>
+            <path class="soft" d="M17.6 15.7A7.2 7.2 0 0 1 6 16.6"/>
+            <path class="strong" d="M5.8 19.3v-3.8h3.8"/>
+          </svg>
         </button>
+      </div>
+
+      <section class="workspace">
+        <section class="pane sub-pane">
+          <div class="section-title">
+            <div>
+              <span class="eyebrow">导出范围</span>
+              <h2>选择日期</h2>
+            </div>
+            <div class="date-toolbar">
+              <button id="select-all-days" class="icon-button secondary" aria-label="全选" title="全选" disabled>
+                <svg class="icon-check-all" viewBox="0 0 24 24" aria-hidden="true">
+                  <path class="soft" d="m4.5 12.8 3.4 3.4 7-8"/>
+                  <path class="strong" d="m9.4 12.5 3.8 3.8 7-8.5"/>
+                </svg>
+              </button>
+              <button id="clear-days" class="icon-button secondary" aria-label="清空" title="清空" disabled>
+                <svg class="icon-clear" viewBox="0 0 24 24" aria-hidden="true">
+                  <path class="soft" d="M8.2 8.2a5.4 5.4 0 0 1 7.6 7.6M15.8 8.2a5.4 5.4 0 0 0-7.6 7.6"/>
+                  <path class="strong" d="M6 18 18 6"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div id="day-list" class="day-list muted">等待课堂视频。</div>
+
+          <div id="prompt-row">
+            <label class="field">
+              <span>默认模板</span>
+              <select id="prompt-template">
+                <option value="notes">默认</option>
+                <option value="review">期末复习</option>
+                <option value="latex">LaTeX 笔记</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>追加 Prompt</span>
+              <textarea id="custom-prompt" rows="5" placeholder="可写入额外要求，或粘贴 LaTeX 参考模板。"></textarea>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button id="export-selected" class="icon-button primary" aria-label="开始导出" title="开始导出" disabled>
+              <svg class="icon-start" viewBox="0 0 24 24" aria-hidden="true"><path class="soft" d="M5 12h10"/><path class="strong" d="m13 6 6 6-6 6"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="pane sub-pane">
+          <div class="progress-head">
+            <strong id="progress-title">准备就绪</strong>
+            <span id="progress-count">0 / 0</span>
+          </div>
+          <div class="track"><div id="bar"></div></div>
+          <pre id="log">选择课程后，可分别读取课程文件或课堂视频。</pre>
+          <button id="download-zip" class="icon-button primary hidden" aria-label="下载 ZIP" title="下载 ZIP">
+            <svg class="icon-download" viewBox="0 0 24 24" aria-hidden="true"><path class="soft" d="M12 3v12"/><path class="strong" d="m7 10 5 5 5-5"/><path class="soft" d="M5 19h14"/></svg>
+          </button>
+        </section>
       </section>
     </section>
   </main>
@@ -144,6 +199,7 @@
             <svg class="icon-speed" viewBox="0 0 24 24" aria-hidden="true"><path class="soft" d="M4 15a8 8 0 0 1 16 0"/><path class="strong" d="m12 15 4-6"/></svg>
           </button>
           <small id="speed-result">尚未测速</small>
+          <small id="save-result" class="save-result" aria-live="polite"></small>
         </div>
       </label>
     </section>

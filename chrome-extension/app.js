@@ -5,6 +5,10 @@ const state = {
   selectedPageKey: null,
   replays: [],
   metadata: {},
+  files: [],
+  selectedFileIds: new Set(),
+  filesRunning: false,
+  videoLoading: false,
   running: false,
   previewCache: new Map(),
   previewShowTimer: null,
@@ -40,6 +44,7 @@ const PROVIDERS = {
 };
 
 const CLASS_VIDEO_TOOL_ID = "8329";
+const REQUESTED_COURSE_ID = new URLSearchParams(location.search).get("courseId") || "";
 
 const PROMPT_TEMPLATES = {
   notes: {
@@ -105,6 +110,17 @@ function log(message) {
   $("#log").scrollTop = $("#log").scrollHeight;
 }
 
+function errorMessage(error) {
+  return error?.message || String(error || "未知错误");
+}
+
+function reportCaughtError(context, error, options = {}) {
+  const message = `${context}：${errorMessage(error)}`;
+  console.error(`[SJTU Course Helper] ${message}`, error);
+  if (options.ui) log(message);
+  return message;
+}
+
 function setRunning(running) {
   state.running = running;
   $("#export-selected").disabled = running || !state.replays.length;
@@ -112,6 +128,8 @@ function setRunning(running) {
   $("#select-all-days").disabled = running || !state.replays.length;
   $("#clear-days").disabled = running || !state.replays.length;
   document.querySelectorAll(".day-check").forEach(input => input.disabled = running);
+  updateFileControls();
+  updateVideoControls();
 }
 
 function currentProvider() {
@@ -129,6 +147,10 @@ function safeName(value) {
   return (value || "课堂概要").replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim();
 }
 
+function safePathPart(value) {
+  return safeName(value).replace(/^\.+$/, "-") || "未命名";
+}
+
 function cleanText(value) {
   return (value || "").replace(/\s+/g, " ").trim();
 }
@@ -136,7 +158,8 @@ function cleanText(value) {
 function absoluteUrl(href, base = "https://oc.sjtu.edu.cn/") {
   try {
     return new URL(href, base).href;
-  } catch (_) {
+  } catch (error) {
+    reportCaughtError(`URL 解析失败 ${href || ""}`.trim(), error);
     return "";
   }
 }
@@ -151,6 +174,23 @@ function stableKey(value) {
 
 function canvasCourseId(url) {
   return absoluteUrl(url).match(/\/courses\/(\d+)/)?.[1] || "";
+}
+
+function selectedCoursePage() {
+  return state.coursePages.find(item => item.key === state.selectedPageKey) || null;
+}
+
+function selectedCourseId() {
+  const page = selectedCoursePage();
+  return page?.courseId || canvasCourseId(page?.canvasUrl || "") || REQUESTED_COURSE_ID;
+}
+
+function currentCourseName(fallback = "SJTU课程") {
+  return selectedCoursePage()?.metadata?.course || state.metadata.course || fallback;
+}
+
+function currentCourseTerm() {
+  return selectedCoursePage()?.metadata?.term || state.metadata.term || "";
 }
 
 function wait(ms) {
@@ -204,6 +244,39 @@ async function fetchCanvasApiPages(url, limit = 3) {
   return items;
 }
 
+function fileDownloadUrl(file) {
+  if (file.downloadUrl) return file.downloadUrl;
+  if (file.url && /\/files\/\d+\/download/.test(file.url)) return file.url;
+  return `https://oc.sjtu.edu.cn/files/${file.id}/download?download_frd=1`;
+}
+
+function normalizeCanvasFile(raw, folderPath = "") {
+  const id = raw.id || raw.file_id;
+  if (!id) return null;
+  const name = cleanText(raw.display_name || raw.filename || raw.name || `文件 ${id}`);
+  return {
+    id: String(id),
+    name,
+    path: [folderPath, name].filter(Boolean).join("/"),
+    size: Number(raw.size || 0),
+    sizeText: raw.size ? formatBytes(Number(raw.size)) : "",
+    updatedAt: raw.updated_at || raw.modified_at || "",
+    downloadUrl: fileDownloadUrl({id, url: raw.url}),
+    source: "canvas-api"
+  };
+}
+
+function normalizeCanvasFolder(raw, parentPath = "") {
+  const id = raw.id || raw.folder_id;
+  if (!id) return null;
+  const name = cleanText(raw.name || raw.full_name?.split("/").pop() || `文件夹 ${id}`);
+  return {
+    id: String(id),
+    name,
+    path: [parentPath, name].filter(Boolean).join("/")
+  };
+}
+
 async function discoverCoursesByApi() {
   const rows = await fetchCanvasApiPages("https://oc.sjtu.edu.cn/api/v1/courses?enrollment_state=active&include[]=term&per_page=100");
   const seen = new Map();
@@ -221,6 +294,39 @@ async function discoverCanvasVideoLinks() {
   return apiCourses.map(classVideoLink).sort((a, b) => a.course.localeCompare(b.course, "zh-Hans-CN"));
 }
 
+async function discoverCourseFilesByApi(courseId) {
+  const root = (await fetchCanvasApiPages(`https://oc.sjtu.edu.cn/api/v1/courses/${courseId}/folders/root`, 1))[0];
+  const rootFolder = normalizeCanvasFolder(root, "");
+  if (!rootFolder) throw new Error("Canvas API 未返回课程根文件夹。");
+  const files = [];
+  const queue = [{id: rootFolder.id, path: ""}];
+  const visited = new Set();
+  while (queue.length) {
+    const folder = queue.shift();
+    if (visited.has(folder.id)) continue;
+    visited.add(folder.id);
+    const [folderFiles, childFolders] = await Promise.all([
+      fetchCanvasApiPages(`https://oc.sjtu.edu.cn/api/v1/folders/${folder.id}/files?per_page=100`, 20),
+      fetchCanvasApiPages(`https://oc.sjtu.edu.cn/api/v1/folders/${folder.id}/folders?per_page=100`, 20)
+    ]);
+    for (const rawFile of folderFiles) {
+      const file = normalizeCanvasFile(rawFile, folder.path);
+      if (file) files.push(file);
+    }
+    for (const rawFolder of childFolders) {
+      const child = normalizeCanvasFolder(rawFolder, folder.path);
+      if (child) queue.push(child);
+    }
+    if (visited.size > 300) throw new Error("课程文件夹层级过多，已停止自动递归。");
+  }
+  return files;
+}
+
+async function discoverCourseFilesFlat(courseId) {
+  const rows = await fetchCanvasApiPages(`https://oc.sjtu.edu.cn/api/v1/courses/${courseId}/files?per_page=100`, 50);
+  return rows.map(row => normalizeCanvasFile(row)).filter(Boolean);
+}
+
 function pad2(value) {
   return String(value).padStart(2, "0");
 }
@@ -228,6 +334,19 @@ function pad2(value) {
 function timestampName() {
   const date = new Date();
   return `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}-${pad2(date.getHours())}${pad2(date.getMinutes())}${pad2(date.getSeconds())}`;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const digits = value >= 10 || unit === 0 ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
 async function courseTab() {
@@ -238,12 +357,37 @@ async function courseTab() {
   return (await resolveCoursePage(page)).tab;
 }
 
+async function filesTab(courseId, {reuse = true} = {}) {
+  const url = `https://oc.sjtu.edu.cn/courses/${courseId}/files`;
+  const existing = reuse ? await chrome.tabs.query({url: `${url}*`}) : [];
+  if (existing.length) return existing[0];
+  return chrome.tabs.create({url, active: false});
+}
+
 async function sendToTab(tabId, message) {
   try {
     return await chrome.tabs.sendMessage(tabId, message);
   } catch (error) {
-    if (!error.message?.includes("Receiving end does not exist")) throw error;
+    if (!error.message?.includes("Receiving end does not exist")) {
+      reportCaughtError("课堂视频页消息发送失败", error);
+      throw error;
+    }
+    reportCaughtError("课堂视频页消息发送失败，正在注入内容脚本", error);
     await chrome.scripting.executeScript({target: {tabId}, files: ["content.js"]});
+    return chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
+async function sendToFilesTab(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    if (!error.message?.includes("Receiving end does not exist")) {
+      reportCaughtError("课程文件页消息发送失败", error);
+      throw error;
+    }
+    reportCaughtError("课程文件页消息发送失败，正在注入内容脚本", error);
+    await chrome.scripting.executeScript({target: {tabId}, files: ["files-content.js"]});
     return chrome.tabs.sendMessage(tabId, message);
   }
 }
@@ -258,6 +402,7 @@ async function discoverCoursePages() {
     kind: "canvas",
     key: `canvas-${link.courseId || index}-${stableKey(link.url)}`,
     canvasUrl: link.url,
+    courseId: link.courseId || canvasCourseId(link.url),
     replays: [],
     metadata: {course: link.course, teacher: "", entryLabel: link.label},
     tab: null
@@ -268,7 +413,8 @@ async function discoverCoursePages() {
     return;
   }
   if (!pages.some(page => page.key === state.selectedPageKey)) {
-    state.selectedPageKey = pages.length === 1 ? pages[0].key : null;
+    const requested = REQUESTED_COURSE_ID && pages.find(page => page.courseId === REQUESTED_COURSE_ID);
+    state.selectedPageKey = requested ? requested.key : (pages.length === 1 ? pages[0].key : null);
   }
 }
 
@@ -300,11 +446,16 @@ async function resolveCoursePage(page) {
   if (page.tab?.id && page.replays?.length) return page;
   log(`正在打开 ${page.metadata.course || "课程"} 的课堂视频入口…`);
   const tab = await chrome.tabs.create({url: page.canvasUrl, active: false});
+  await chrome.tabs.update(tab.id, {muted: true}).catch(error => reportCaughtError("课堂视频标签页静音失败", error));
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
-    const current = await chrome.tabs.get(tab.id).catch(() => null);
+    const current = await chrome.tabs.get(tab.id).catch(error => {
+      reportCaughtError("读取课堂视频标签页状态失败", error);
+      return null;
+    });
     if (!current) throw new Error("课堂视频标签页已关闭。");
     if (current.url?.includes("v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/")) {
+      await chrome.tabs.update(current.id, {muted: true}).catch(error => reportCaughtError("课堂视频标签页静音失败", error));
       try {
         const reply = await sendToTab(current.id, {action: "listReplays"});
         if (reply?.replays?.length) {
@@ -313,8 +464,8 @@ async function resolveCoursePage(page) {
           page.metadata = {...page.metadata, ...(reply.metadata || {})};
           return page;
         }
-      } catch (_) {
-        // 视频页脚本可能还没挂上，稍后重试。
+      } catch (error) {
+        reportCaughtError("课堂视频页脚本暂未响应", error);
       }
     }
     await wait(1000);
@@ -324,45 +475,46 @@ async function resolveCoursePage(page) {
 
 async function loadCourse() {
   if (state.running) return;
-  $("#log").textContent = "正在读取课程页面…";
+  $("#log").textContent = "正在识别课程…";
   try {
     await discoverCoursePages();
     renderCoursePages();
     if (!state.selectedPageKey && state.coursePages.length > 1) {
       const count = state.coursePages.length;
       $("#course").textContent = "请选择课程";
-      $("#meta").textContent = `已识别 ${count} 个课堂视频入口。`;
+      $("#meta").textContent = `已识别 ${count} 门课程。`;
       state.tab = null;
       state.replays = [];
       state.metadata = {};
       state.previewCache.clear();
+      state.files = [];
+      state.selectedFileIds.clear();
       renderDayChecks(new Map());
+      renderFiles();
       $("#export-selected").disabled = true;
       $("#select-all-days").disabled = true;
       $("#clear-days").disabled = true;
+      updateVideoControls();
       progress(0, count, "等待选择课程");
-      $("#log").textContent = "已完成全量识别，请在顶部选择要导出的课程。";
+      $("#video-meta").textContent = "选择课程后读取课堂视频。";
+      $("#log").textContent = "已完成课程识别，请在顶部选择课程。";
       return;
     }
-    const page = state.coursePages.find(item => item.key === state.selectedPageKey);
+    const page = selectedCoursePage();
     if (!page) throw new Error("未找到课堂视频入口，请确认已经登录 oc.sjtu.edu.cn。");
-    await resolveCoursePage(page);
-    renderCoursePages();
-    if (!page.replays?.length) throw new Error("页面尚未加载出回放列表，请稍后重试。");
-    state.tab = page.tab;
-    state.replays = page.replays;
     state.metadata = page.metadata || {};
-    state.previewCache.clear();
-    const grouped = groupReplays(state.replays);
-    $("#course").textContent = state.metadata.course || "SJTU 课堂视频";
-    $("#meta").textContent = `${state.metadata.teacher || "教师信息未显示"} · ${state.replays.length} 个回放 · ${grouped.size} 个上课日`;
-    renderDayChecks(grouped);
-    $("#export-selected").disabled = false;
-    $("#select-all-days").disabled = false;
-    $("#clear-days").disabled = false;
-    progress(0, state.replays.length, "准备就绪");
-    $("#log").textContent = "课程读取成功。可勾选一个或多个日期，也可以全选。";
+    $("#course").textContent = currentCourseName("SJTU 课程");
+    $("#meta").textContent = `${currentCourseTerm() || "学期信息未显示"} · 文件打包与视频概要已分模块处理`;
+    resetVideoModule("等待读取课堂视频。");
+    state.files = [];
+    state.selectedFileIds.clear();
+    renderFiles();
+    await loadFiles({quiet: true});
+    await loadVideo({quiet: true});
+    $("#meta").textContent = `${currentCourseTerm() || "学期信息未显示"} · ${state.files.length} 个文件 · ${state.replays.length} 个回放`;
+    $("#log").textContent = "课程读取成功。文件下载与视频概要可分别操作。";
   } catch (error) {
+    reportCaughtError("课程读取失败", error);
     $("#course").textContent = "未连接到课程页面";
     $("#meta").textContent = error.message;
     $("#log").textContent = error.message;
@@ -383,6 +535,11 @@ function renderDayChecks(grouped) {
   const list = $("#day-list");
   list.classList.remove("muted");
   list.textContent = "";
+  if (!grouped.size) {
+    list.classList.add("muted");
+    list.textContent = selectedCourseId() ? "等待课堂视频。" : "等待选择课程。";
+    return;
+  }
   for (const day of [...grouped.keys()].sort().reverse()) {
     const label = document.createElement("label");
     label.className = "day-item";
@@ -400,13 +557,306 @@ function renderDayChecks(grouped) {
   }
 }
 
+function updateVideoControls() {
+  const loading = state.videoLoading || state.running;
+  $("#refresh-video").disabled = loading || !selectedCourseId();
+  $("#export-selected").disabled = loading || state.running || !state.replays.length;
+  $("#select-all-days").disabled = loading || state.running || !state.replays.length;
+  $("#clear-days").disabled = loading || state.running || !state.replays.length;
+  document.querySelectorAll(".day-check").forEach(input => input.disabled = loading || state.running);
+}
+
+function resetVideoModule(message = "等待课堂视频。") {
+  state.tab = null;
+  state.replays = [];
+  state.previewCache.clear();
+  renderDayChecks(new Map());
+  $("#video-meta").textContent = message;
+  progress(0, 0, "视频未读取");
+  updateVideoControls();
+}
+
+async function loadVideo({quiet = false} = {}) {
+  if (state.running || state.videoLoading) return;
+  const page = selectedCoursePage();
+  if (!page) {
+    resetVideoModule("请选择课程后读取课堂视频。");
+    return;
+  }
+  state.videoLoading = true;
+  state.tab = null;
+  state.replays = [];
+  state.previewCache.clear();
+  renderDayChecks(new Map());
+  $("#video-meta").textContent = "正在读取课堂视频回放…";
+  progress(0, 0, "读取课堂视频");
+  updateVideoControls();
+  if (!quiet) log(`正在读取 ${currentCourseName("课程")} 的课堂视频…`);
+  try {
+    await resolveCoursePage(page);
+    renderCoursePages();
+    if (!page.replays?.length) throw new Error("页面尚未加载出回放列表，请稍后重试。");
+    state.tab = page.tab;
+    state.replays = page.replays;
+    state.metadata = {...state.metadata, ...(page.metadata || {})};
+    const grouped = groupReplays(state.replays);
+    renderDayChecks(grouped);
+    $("#video-meta").textContent = `${state.replays.length} 个回放 · ${grouped.size} 个上课日`;
+    progress(0, state.replays.length, "视频准备就绪");
+    if (!quiet) log("课堂视频读取成功。可勾选一个或多个日期，也可以全选。");
+  } catch (error) {
+    resetVideoModule(`课堂视频读取失败：${error.message}`);
+    reportCaughtError("课堂视频读取失败", error, {ui: !quiet});
+  } finally {
+    state.videoLoading = false;
+    updateVideoControls();
+  }
+}
+
 function selectedDays() {
   return new Set([...document.querySelectorAll(".day-check:checked")].map(input => input.value));
 }
 
+function selectedFiles() {
+  return state.files.filter(file => state.selectedFileIds.has(file.id));
+}
+
+function filteredFiles() {
+  const keyword = cleanText($("#file-search").value).toLowerCase();
+  if (!keyword) return state.files;
+  return state.files.filter(file => `${file.name} ${file.path}`.toLowerCase().includes(keyword));
+}
+
+function updateFileControls() {
+  const hasFiles = !!state.files.length;
+  const running = state.running || state.filesRunning;
+  $("#refresh-files").disabled = running || !selectedCourseId();
+  $("#file-search").disabled = running || !hasFiles;
+  $("#select-all-files").disabled = running || !hasFiles;
+  $("#clear-files").disabled = running || !hasFiles;
+  $("#download-files").disabled = running || !selectedFiles().length;
+  document.querySelectorAll(".file-check").forEach(input => input.disabled = running);
+}
+
+function renderFiles() {
+  const list = $("#file-list");
+  const visible = filteredFiles();
+  list.textContent = "";
+  list.classList.toggle("muted", !visible.length);
+  if (!state.files.length) {
+    list.textContent = selectedCourseId() ? "未读取到课程文件。" : "等待选择课程。";
+    $("#files-meta").textContent = selectedCourseId() ? "可尝试打开课程文件页后重新读取。" : "选择课程后自动读取文件。";
+    updateFileControls();
+    return;
+  }
+  if (!visible.length) {
+    list.textContent = "没有匹配的文件。";
+    $("#files-meta").textContent = `已读取 ${state.files.length} 个文件，当前筛选 0 个。`;
+    updateFileControls();
+    return;
+  }
+  const selectedCount = selectedFiles().length;
+  $("#files-meta").textContent = `已读取 ${state.files.length} 个文件，已选 ${selectedCount} 个。`;
+  for (const file of visible) {
+    const label = document.createElement("label");
+    label.className = "file-item";
+    label.title = file.path || file.name;
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.className = "file-check";
+    input.value = file.id;
+    input.checked = state.selectedFileIds.has(file.id);
+    input.addEventListener("change", () => {
+      if (input.checked) state.selectedFileIds.add(file.id);
+      else state.selectedFileIds.delete(file.id);
+      updateFileControls();
+      $("#files-meta").textContent = `已读取 ${state.files.length} 个文件，已选 ${selectedFiles().length} 个。`;
+    });
+
+    const body = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "file-name";
+    name.textContent = file.name;
+    const path = document.createElement("div");
+    path.className = "file-path";
+    path.textContent = file.path && file.path !== file.name ? file.path : "课程根目录";
+    body.append(name, path);
+
+    const size = document.createElement("span");
+    size.className = "file-size";
+    size.textContent = file.sizeText || "";
+    label.append(input, body, size);
+    list.append(label);
+  }
+  updateFileControls();
+}
+
+async function scanFilesDomTab(tab, courseId, url) {
+  await chrome.tabs.update(tab.id, {url, active: false});
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    const current = await chrome.tabs.get(tab.id).catch(error => {
+      reportCaughtError("读取课程文件标签页状态失败", error);
+      return null;
+    });
+    if (!current) throw new Error("课程文件标签页已关闭。");
+    if (current.status === "complete" || current.url?.includes(`/courses/${courseId}/files`)) {
+      try {
+        const reply = await sendToFilesTab(current.id, {action: "scanCanvasFiles"});
+        if (reply?.files?.length || reply?.folders?.length) {
+          return {
+            ...reply,
+            files: (reply.files || []).map(file => ({
+              ...file,
+              id: String(file.id),
+              path: file.path || file.name,
+              downloadUrl: absoluteUrl(file.downloadUrl)
+            }))
+          };
+        }
+      } catch (error) {
+        reportCaughtError("课程文件页脚本暂未响应", error);
+      }
+    }
+    await wait(500);
+  }
+  throw new Error("课程文件页未在 20 秒内加载出文件清单。");
+}
+
+async function discoverCourseFilesFromDom(courseId) {
+  const tab = await filesTab(courseId, {reuse: false});
+  const startUrl = `https://oc.sjtu.edu.cn/courses/${courseId}/files`;
+  const queue = [startUrl];
+  const visited = new Set();
+  const files = [];
+  try {
+    while (queue.length) {
+      const url = queue.shift();
+      if (visited.has(url)) continue;
+      visited.add(url);
+      const reply = await scanFilesDomTab(tab, courseId, url);
+      files.push(...(reply.files || []));
+      for (const folder of reply.folders || []) {
+        if (folder.href && !visited.has(folder.href)) queue.push(folder.href);
+      }
+      if (visited.size > 80) throw new Error("文件夹数量过多，已停止页面递归识别。");
+    }
+    return mergeFiles(files);
+  } finally {
+    await chrome.tabs.remove(tab.id).catch(error => reportCaughtError("关闭临时课程文件标签页失败", error));
+  }
+}
+
+function mergeFiles(files) {
+  const seen = new Map();
+  for (const file of files) {
+    if (!file?.id) continue;
+    seen.set(String(file.id), {...file, id: String(file.id)});
+  }
+  return [...seen.values()].sort((a, b) => (a.path || a.name).localeCompare(b.path || b.name, "zh-Hans-CN"));
+}
+
+async function loadFiles({quiet = false} = {}) {
+  const courseId = selectedCourseId();
+  if (!courseId || state.filesRunning) return;
+  state.filesRunning = true;
+  updateFileControls();
+  $("#file-list").classList.add("muted");
+  $("#file-list").textContent = "正在读取课程文件…";
+  if (!quiet) log("正在读取课程文件…");
+  try {
+    let files = [];
+    try {
+      files = await discoverCourseFilesByApi(courseId);
+      if (!files.length) files = await discoverCourseFilesFlat(courseId);
+    } catch (apiError) {
+      reportCaughtError("Canvas API 读取失败，改用当前文件页识别", apiError, {ui: !quiet});
+      files = await discoverCourseFilesFromDom(courseId);
+    }
+    if (!files.length) {
+      files = await discoverCourseFilesFromDom(courseId);
+    }
+    state.files = mergeFiles(files);
+    state.selectedFileIds = new Set(state.files.map(file => file.id));
+    renderFiles();
+    if (!quiet) log(`已读取 ${state.files.length} 个课程文件。`);
+  } catch (error) {
+    state.files = [];
+    state.selectedFileIds.clear();
+    $("#file-list").classList.add("muted");
+    $("#file-list").textContent = `读取失败：${error.message}`;
+    $("#files-meta").textContent = "课程文件读取失败。";
+    reportCaughtError("课程文件读取失败", error, {ui: !quiet});
+  } finally {
+    state.filesRunning = false;
+    updateFileControls();
+  }
+}
+
+async function fetchCourseFileBytes(file, courseId) {
+  const downloadUrl = fileDownloadUrl(file);
+  const backgroundReply = await chrome.runtime.sendMessage({
+    action: "fetchCanvasFileInBackground",
+    downloadUrl
+  });
+  if (backgroundReply?.base64) return base64ToBytes(backgroundReply.base64);
+
+  const tab = await filesTab(courseId);
+  const pageReply = await sendToFilesTab(tab.id, {
+    action: "fetchCanvasFile",
+    downloadUrl
+  });
+  if (pageReply?.base64) return base64ToBytes(pageReply.base64);
+  throw new Error(backgroundReply?.error || pageReply?.error || "未返回文件内容。");
+}
+
+async function downloadSelectedFiles() {
+  if (state.filesRunning) return;
+  const files = selectedFiles();
+  if (!files.length) {
+    log("请至少勾选一个课程文件。");
+    return;
+  }
+  state.filesRunning = true;
+  updateFileControls();
+  const folder = safePathPart(currentCourseName("SJTU课程文件"));
+  $("#files-meta").textContent = `正在打包 ${files.length} 个文件…`;
+  log(`开始读取并打包 ${files.length} 个课程文件。`);
+  const zipEntries = [];
+  let failed = 0;
+  const usedNames = new Set();
+  const courseId = selectedCourseId();
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
+    progress(index, files.length, `读取课程文件 ${index + 1} / ${files.length}`);
+    try {
+      const bytes = await fetchCourseFileBytes(file, courseId);
+      const filename = uniquifyZipName((file.path || file.name).split("/").map(safePathPart).join("/"), usedNames);
+      zipEntries.push({name: filename, bytes});
+    } catch (error) {
+      failed++;
+      reportCaughtError(`读取失败 ${file.name}`, error, {ui: true});
+    }
+  }
+  try {
+    if (!zipEntries.length) throw new Error("没有成功读取的文件。");
+    progress(zipEntries.length, files.length, "正在生成 ZIP");
+    await downloadZipNow(`${folder}-课程文件-${timestampName()}.zip`, zipEntries);
+    $("#files-meta").textContent = `已打包下载 ${zipEntries.length} 个文件${failed ? `，失败 ${failed} 个` : ""}。`;
+    log(`课程文件 ZIP 已下载：包含 ${zipEntries.length} 个文件${failed ? `，失败 ${failed} 个` : ""}。`);
+  } catch (error) {
+    $("#files-meta").textContent = `打包失败：${error.message}`;
+    reportCaughtError("课程文件打包失败", error, {ui: true});
+  } finally {
+    state.filesRunning = false;
+    updateFileControls();
+  }
+}
+
 function captionsMarkdown(day, lessons) {
   const lines = [
-    `# ${state.metadata.course || "课堂"} · ${day} 原字幕`,
+    `# ${currentCourseName("课堂")} · ${day} 原字幕`,
     "",
     `> 教师：${state.metadata.teacher || "未显示"}  `,
     `> 当日回放：${lessons.length} 段  `,
@@ -491,6 +941,7 @@ async function showDayPreview(day, anchor) {
     state.previewCache.set(day, preview);
     showPreview(anchor, preview);
   } catch (error) {
+    reportCaughtError("当天字幕预览失败", error);
     showPreview(anchor, `预览失败：${error.message}`);
   }
 }
@@ -527,7 +978,10 @@ async function completeWithAI(prompt, apiKey, provider, model, options = {}) {
           max_tokens: maxTokens
         })
       });
-      const data = await response.json().catch(() => ({}));
+      const data = await response.json().catch(error => {
+        reportCaughtError(`${PROVIDERS[provider].label} 响应 JSON 解析失败`, error);
+        return {};
+      });
       if (!response.ok) throw new Error(data.error?.message || `${PROVIDERS[provider].label} 请求失败（${response.status}）`);
       const choice = data.choices?.[0] || {};
       const text = choice.message?.content || "";
@@ -557,7 +1011,10 @@ async function completeWithAI(prompt, apiKey, provider, model, options = {}) {
           messages
         })
       });
-      const data = await response.json().catch(() => ({}));
+      const data = await response.json().catch(error => {
+        reportCaughtError("Claude 响应 JSON 解析失败", error);
+        return {};
+      });
       if (!response.ok) throw new Error(data.error?.message || `Claude 请求失败（${response.status}）`);
       const text = (data.content || []).map(item => item.text || "").join("");
       if (text) chunks.push(text);
@@ -579,7 +1036,10 @@ async function completeWithAI(prompt, apiKey, provider, model, options = {}) {
           generationConfig: {temperature: 0.2, maxOutputTokens: maxTokens}
         })
       });
-      const data = await response.json().catch(() => ({}));
+      const data = await response.json().catch(error => {
+        reportCaughtError("Gemini 响应 JSON 解析失败", error);
+        return {};
+      });
       if (!response.ok) throw new Error(data.error?.message || `Gemini 请求失败（${response.status}）`);
       const candidate = data.candidates?.[0] || {};
       const text = (candidate.content?.parts || []).map(item => item.text || "").join("");
@@ -597,10 +1057,15 @@ function currentTemplate() {
   return PROMPT_TEMPLATES[$("#prompt-template").value] || PROMPT_TEMPLATES.notes;
 }
 
+function setSaveResult(message, isError = false) {
+  $("#save-result").textContent = message;
+  $("#save-result").classList.toggle("error", isError);
+}
+
 async function aiNotesDay(day, lessons, apiKey, provider, model, extraPrompt, template) {
   const prompt = `${template.prompt}
 
-标题请写为：“${state.metadata.course || "课堂"} · ${day} 课堂笔记”。
+标题请写为：“${currentCourseName("课堂")} · ${day} 课堂笔记”。
 
 ${extraPrompt ? `用户追加要求：\n${extraPrompt}\n\n` : ""}课堂材料：
 ${aiSource(lessons)}`;
@@ -649,6 +1114,35 @@ function concatBytes(parts) {
   return output;
 }
 
+function fileBytes(file, encoder) {
+  if (file.bytes instanceof Uint8Array) return file.bytes;
+  if (file.bytes instanceof ArrayBuffer) return new Uint8Array(file.bytes);
+  return encoder.encode(file.text || "");
+}
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function uniquifyZipName(name, usedNames) {
+  const clean = name || "未命名";
+  if (!usedNames.has(clean)) {
+    usedNames.add(clean);
+    return clean;
+  }
+  const dot = clean.lastIndexOf(".");
+  const base = dot > 0 ? clean.slice(0, dot) : clean;
+  const ext = dot > 0 ? clean.slice(dot) : "";
+  let index = 2;
+  while (usedNames.has(`${base} (${index})${ext}`)) index++;
+  const unique = `${base} (${index})${ext}`;
+  usedNames.add(unique);
+  return unique;
+}
+
 function zipBlob(files) {
   const encoder = new TextEncoder();
   const localParts = [];
@@ -657,7 +1151,7 @@ function zipBlob(files) {
   const {time, day} = dosDateTime();
   for (const file of files) {
     const name = encoder.encode(file.name);
-    const data = encoder.encode(file.text);
+    const data = fileBytes(file, encoder);
     const crc = crc32(data);
     const local = concatBytes([
       u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(time), u16(day),
@@ -679,6 +1173,21 @@ function zipBlob(files) {
     u32(central.length), u32(centralStart), u16(0)
   ]);
   return new Blob([concatBytes([...localParts, central, end])], {type: "application/zip"});
+}
+
+async function downloadZipNow(filename, files) {
+  const blob = zipBlob(files);
+  const url = URL.createObjectURL(blob);
+  try {
+    await chrome.downloads.download({
+      url,
+      filename,
+      conflictAction: "uniquify",
+      saveAs: false
+    });
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
 }
 
 function prepareZipDownload(filename, files) {
@@ -723,7 +1232,7 @@ async function collect(replays, options = {}) {
       lessons.push(reply);
     } catch (error) {
       failures.push(`${replay.time}：${error.message}`);
-      if (!options.silent) log(`跳过 ${replay.time}：${error.message}`);
+      reportCaughtError(`跳过 ${replay.time}`, error, {ui: !options.silent});
     }
     if (!options.silent) progress(i + 1, replays.length, `已读取 ${i + 1} / ${replays.length}`);
   }
@@ -779,9 +1288,9 @@ async function run(days) {
     const selected = state.replays.filter(item => days.has(item.time.slice(0, 10)));
     const {lessons, failures} = await collect(selected);
     const grouped = groupReplays(lessons);
-    const folder = safeName(state.metadata.course || "SJTU课堂概要");
+    const folder = safeName(currentCourseName("SJTU课堂概要"));
     const files = [];
-    const index = [`# ${state.metadata.course || "课堂"} · 导出索引`, "", `共导出 ${grouped.size} 个上课日、${lessons.length} 段回放。`, ""];
+    const index = [`# ${currentCourseName("课堂")} · 导出索引`, "", `共导出 ${grouped.size} 个上课日、${lessons.length} 段回放。`, ""];
     if (useAI) index.push(`AI：${providerLabel} / ${model}`, "");
 
     let dayIndex = 0;
@@ -808,7 +1317,7 @@ async function run(days) {
     if (failures.length) log(`另有 ${failures.length} 段未成功，详见导出索引。`);
   } catch (error) {
     progress(0, 0, "处理失败");
-    log(`失败：${error.message}`);
+    reportCaughtError("课堂视频概要导出失败", error, {ui: true});
   } finally {
     setRunning(false);
   }
@@ -820,6 +1329,10 @@ $("#course-pages").addEventListener("change", async () => {
   state.selectedPageKey = $("#course-pages").value;
   state.tab = null;
   state.replays = [];
+  state.files = [];
+  state.selectedFileIds.clear();
+  $("#file-search").value = "";
+  renderFiles();
   await loadCourse();
 });
 $("#settings-toggle").addEventListener("click", () => {
@@ -842,17 +1355,23 @@ $("#provider").addEventListener("change", async () => {
   const {id} = currentProvider();
   await chrome.storage.local.set({aiProvider: id});
   await loadProviderSettings();
+  setSaveResult("");
 });
 $("#model").addEventListener("change", async () => {
   const {id} = currentProvider();
   const saved = await chrome.storage.local.get("aiModels");
   await chrome.storage.local.set({aiModels: {...(saved.aiModels || {}), [id]: $("#model").value.trim()}});
+  setSaveResult("");
 });
 $("#save-key").addEventListener("click", async () => {
   const key = $("#api-key").value.trim();
   const {id, label, storageKey} = currentProvider();
   const model = $("#model").value.trim();
-  if (!key) return log("API Key 为空，未保存。");
+  if (!key) {
+    setSaveResult("API Key 为空，未保存", true);
+    return log("API Key 为空，未保存。");
+  }
+  setSaveResult("保存中…");
   const saved = await chrome.storage.local.get(["aiKeys", "aiModels"]);
   await chrome.storage.local.set({
     aiProvider: id,
@@ -861,21 +1380,35 @@ $("#save-key").addEventListener("click", async () => {
     [storageKey]: key,
     [`${storageKey}SavedAt`]: new Date().toISOString()
   });
+  setSaveResult("保存成功");
   log(`${label} API Key 已保存。`);
 });
 $("#test-ai").addEventListener("click", async () => {
   try {
     $("#test-ai").disabled = true;
+    setSaveResult("");
     await testAIConnection();
   } catch (error) {
     $("#speed-result").textContent = `测速失败：${error.message}`;
-    log(`测速失败：${error.message}`);
+    reportCaughtError("测速失败", error, {ui: true});
   } finally {
     $("#test-ai").disabled = false;
   }
 });
 $("#export-selected").addEventListener("click", () => run(selectedDays()));
 $("#download-zip").addEventListener("click", downloadPreparedZip);
+$("#refresh-files").addEventListener("click", () => loadFiles());
+$("#refresh-video").addEventListener("click", () => loadVideo());
+$("#download-files").addEventListener("click", downloadSelectedFiles);
+$("#file-search").addEventListener("input", renderFiles);
+$("#select-all-files").addEventListener("click", () => {
+  filteredFiles().forEach(file => state.selectedFileIds.add(file.id));
+  renderFiles();
+});
+$("#clear-files").addEventListener("click", () => {
+  filteredFiles().forEach(file => state.selectedFileIds.delete(file.id));
+  renderFiles();
+});
 $("#select-all-days").addEventListener("click", () => {
   document.querySelectorAll(".day-check").forEach(input => input.checked = true);
 });
@@ -898,6 +1431,7 @@ async function loadProviderSettings() {
   $("#api-key").placeholder = keyPlaceholder;
   $("#model").value = model;
   $("#speed-result").textContent = "尚未测速";
+  setSaveResult("");
 }
 
 chrome.storage.local.get(["aiProvider", "customPrompt", "promptTemplate"]).then(async ({aiProvider, customPrompt, promptTemplate}) => {

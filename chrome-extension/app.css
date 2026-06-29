@@ -12,7 +12,7 @@ header { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
 h1, h2, p { margin: 0; }
 h1 { font-size: 23px; letter-spacing: -.3px; }
 h2 { font-size: 18px; }
-small, .course-card p { color: #6c7890; }
+small, .course-card p, .files-card p, .video-card p { color: #6c7890; }
 #settings-toggle { margin-left: auto; }
 .card { padding: 22px; border: 1px solid #e3e8f1; border-radius: 18px; background: #fff; box-shadow: 0 8px 28px #17233c0b; }
 .course-card { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
@@ -21,8 +21,10 @@ small, .course-card p { color: #6c7890; }
 .course-select { margin-top: 12px; max-width: 560px; }
 .workspace { display: grid; grid-template-columns: minmax(340px, 1fr) minmax(360px, .95fr); gap: 16px; align-items: stretch; }
 .pane { min-height: 455px; display: flex; flex-direction: column; }
+.sub-pane { min-height: 430px; padding-top: 16px; border-top: 1px solid #edf1f7; }
 .section-title, .progress-head, .actions, .config-actions { display: flex; align-items: center; gap: 10px; }
 .section-title > div { flex: 1; }
+.section-title p { margin-top: 7px; }
 .eyebrow { display: block; margin-bottom: 7px; color: #4773bb; font-size: 11px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 button, input, textarea, select { font: inherit; }
 button { border: 0; border-radius: 10px; padding: 10px 15px; font-weight: 650; cursor: pointer; }
@@ -67,11 +69,22 @@ input:focus, textarea:focus, select:focus { border-color: #4e86dc; box-shadow: 0
 .field-subtitle { margin: 16px 0 8px; }
 .config-actions { margin-top: 14px; }
 .config-actions #speed-result { margin-left: 2px; color: #69758c; }
-.date-toolbar { display: flex; gap: 8px; }
+.save-result { color: #1f9d55; }
+.save-result.error { color: #e55353; }
+.date-toolbar, .file-toolbar { display: flex; gap: 8px; }
 .day-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; max-height: 245px; overflow: auto; margin-top: 14px; padding: 10px; border: 1px solid #d6deea; border-radius: 12px; background: #fbfcfe; }
 .day-list.muted { display: block; color: #7b879a; }
 .day-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #e1e7f0; border-radius: 10px; background: white; color: #26354f; font-size: 13px; }
 .day-item input { width: auto; }
+.files-card, .video-card { margin-bottom: 16px; }
+#file-search { margin-top: 14px; }
+.file-list { display: grid; gap: 8px; max-height: 315px; overflow: auto; margin-top: 12px; padding: 10px; border: 1px solid #d6deea; border-radius: 12px; background: #fbfcfe; }
+.file-list.muted { display: block; color: #7b879a; }
+.file-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid #e1e7f0; border-radius: 10px; background: white; color: #26354f; font-size: 13px; }
+.file-item input { width: auto; }
+.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.file-path { margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #71809a; font-size: 12px; }
+.file-size { color: #71809a; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .actions { margin-top: auto; padding-top: 18px; justify-content: flex-end; }
 .progress-head { justify-content: space-between; }
 #progress-count { color: #71809a; font-variant-numeric: tabular-nums; }
@@ -91,5 +104,9 @@ pre { flex: 1; min-height: 310px; margin: 0; overflow: auto; white-space: pre-wr
   .workspace { grid-template-columns: 1fr; }
   .pane { min-height: 0; }
   .section-title, .config-actions { align-items: stretch; }
+  .section-title { flex-wrap: wrap; }
+  .file-toolbar { width: 100%; justify-content: flex-end; }
   .ai-grid { grid-template-columns: 1fr; }
+  .file-item { grid-template-columns: auto minmax(0, 1fr); }
+  .file-size { grid-column: 2; }
 }

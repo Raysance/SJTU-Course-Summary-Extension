@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "SJTU 课堂概要导出",
-  "version": "4.8.1",
-  "description": "从已登录的 SJTU Canvas 自动识别课堂视频并读取平台字幕，按日期整理并用多种 AI 服务生成课堂笔记。",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3qFoNPOk6fIVUob0QjuzCITbla2/6OkZ0A4SXwxzS6dE/iOj7Tus9PJTOlQgrvk/3eHJfQN3UeMezpII709rxJr/OdF0L8Ty2L5K8tlVEIHppVII3YAH2lpXG8gZLIinVxF66AQrg3HzdaHL90QJzB31hj2NhzI1DrNEg+dzlFjWm+M0rheaQi9MJXvq+G6p0fNsoQp9GqZy6miHw/SwUh4rDqR+Z3PZntMZ89ajQTT3XnkqNK9CjsCTK0FunEijto7amkm0B30wRxXFETIg5b5I5kb/leu2CVv6pjIi3nEgChe0oX5/Iphut2Hi5hv23iPqtz4qylrr246fR3sHIQIDAQAB",
-  "permissions": ["downloads", "storage", "tabs", "scripting"],
+  "name": "SJTU 课程资料助手",
+  "version": "4.8.7",
+  "description": "从 SJTU Canvas 自动读取课堂视频字幕生成笔记，并识别课程文件，支持勾选后一键打包下载 ZIP。",
+  "permissions": ["downloads", "storage", "tabs", "scripting", "webRequest"],
   "host_permissions": [
     "https://oc.sjtu.edu.cn/*",
+    "https://s3.jcloud.sjtu.edu.cn/*",
     "https://v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/*",
     "https://api.deepseek.com/*",
     "https://api.openai.com/*",
@@ -14,16 +14,25 @@
     "https://generativelanguage.googleapis.com/*"
   ],
   "action": {
-    "default_title": "打开 SJTU 课堂概要导出"
+    "default_title": "打开 SJTU 课程资料助手"
   },
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [{
-    "matches": [
-      "https://v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/*"
-    ],
-    "js": ["content.js"],
-    "run_at": "document_idle"
-  }]
+  "content_scripts": [
+    {
+      "matches": [
+        "https://v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://oc.sjtu.edu.cn/courses/*/files*"
+      ],
+      "js": ["files-content.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }
