@@ -6,7 +6,7 @@ const liveUrl = "https://v.sjtu.edu.cn/jy-application-resourcemanage-ui/qr-test"
 let context, worker, id, panel;
 
 const liveHtml = `<!doctype html><meta charset="utf-8"><title>模拟课堂直播</title>
-<h1>模拟课堂直播</h1><video autoplay muted playsinline style="width:960px"></video>
+<div class="all-in-one-play-link"><header><h1>模拟课堂直播</h1><div class="tab-wrapper"><div class="tab-item">点播</div><div class="tab-item active">直播</div></div></header><div class="live-page-wrapper"><video autoplay muted playsinline style="width:960px"></video></div></div>
 <script>
 const canvas = document.createElement('canvas'); canvas.width=1280; canvas.height=720;
 const ctx=canvas.getContext('2d');

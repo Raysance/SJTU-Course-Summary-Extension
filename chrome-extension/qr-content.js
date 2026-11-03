@@ -5,6 +5,11 @@
   let timer;
   let generation = 0;
   let settingsRevision = 0;
+  let purposeReady = false;
+  let pendingSettings;
+  let liveRoot = null;
+  let livePage = "";
+  let autoLiveAttempted = false;
   let scanner;
   let scanning = false;
   let cursor = 0;
@@ -23,7 +28,10 @@
   }
 
   function activeVideos() {
-    return [...document.querySelectorAll("video")].filter(video => video.isConnected && video.readyState >= 2 && video.videoWidth >= 64 && !video.paused && !video.ended);
+    const context = SJTUPlayer.inspect(document, location.href, window);
+    if (context.mode !== "live") return [];
+    const root = document.querySelector(".live-page-wrapper") || (context.kind === "center" && context.document === document ? null : document);
+    return [...(root?.querySelectorAll("video") || [])].filter(video => video.isConnected && video.readyState >= 2 && video.videoWidth >= 64 && !video.paused && !video.ended);
   }
 
   function clearPreviews() {
@@ -77,6 +85,28 @@
     scanning = true;
     let delay = config.intervalMs;
     try {
+      const context = SJTUPlayer.inspect(document, location.href, window);
+      if (context.kind === "center") {
+        if (context.root !== liveRoot || livePage !== location.href) {
+          liveRoot = context.root;
+          livePage = location.href;
+          autoLiveAttempted = false;
+        }
+        if (context.document === document && globalThis.__SJTU_QR_PAGE_PURPOSE__ !== "replay" && !autoLiveAttempted && context.liveTab) {
+          const selected = SJTUPlayer.select(context, "live");
+          if (selected !== "waiting") autoLiveAttempted = true;
+          if (selected !== "ready") {
+            clearPreviews();
+            await status("waiting", "正在进入直播…");
+            return;
+          }
+        }
+      }
+      if (context.mode !== "live") {
+        clearPreviews();
+        await status("waiting", context.mode === "replay" ? "当前是点播，直播提醒已暂停" : "等待直播页面加载");
+        return;
+      }
       const videos = activeVideos();
       if (Date.now() >= previewUntil) previews.clear();
       for (const video of previews.keys()) if (!videos.includes(video)) previews.delete(video);
@@ -104,7 +134,7 @@
           return;
         }
         if (token !== generation) return;
-        if (!video.isConnected || video.paused || video.ended || input.src !== video.currentSrc || input.stream !== video.srcObject || input.href !== location.href || input.title !== pageTitle()) {
+        if (SJTUPlayer.inspect(document, location.href, window).mode !== "live" || !video.isConnected || video.paused || video.ended || input.src !== video.currentSrc || input.stream !== video.srcObject || input.href !== location.href || input.title !== pageTitle()) {
           previews.delete(video);
           return;
         }
@@ -130,7 +160,9 @@
   }
 
   function apply(value) {
+    const wasEnabled = config.enabled;
     config = SJTUQR.settings(value);
+    if (!wasEnabled && config.enabled) { liveRoot = null; autoLiveAttempted = false; }
     clearTimeout(timer);
     const token = ++generation;
     if (config.enabled) {
@@ -146,7 +178,8 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.qrSettings) {
       ++settingsRevision;
-      apply(changes.qrSettings.newValue);
+      pendingSettings = changes.qrSettings.newValue;
+      if (purposeReady) apply(pendingSettings);
     }
   });
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -169,11 +202,15 @@
     sendResponse({items, hasMore: allVideos.length > videos.length});
     return false;
   });
-  const initialRevision = settingsRevision;
-  chrome.storage.local.get("qrSettings").then(saved => {
-    if (settingsRevision === initialRevision) apply(saved.qrSettings);
+  Promise.all([
+    chrome.storage.local.get("qrSettings"),
+    send({action: "qrGetPlaybackPurpose"}).catch(() => ({}))
+  ]).then(([saved, purpose]) => {
+    if (purpose?.purpose === "replay") globalThis.__SJTU_QR_PAGE_PURPOSE__ = "replay";
+    purposeReady = true;
+    apply(settingsRevision ? pendingSettings : saved.qrSettings);
   });
-  window.addEventListener("pagehide", () => { ++generation; clearTimeout(timer); scanner?.release(); scanner = null; clearPreviews(); });
+  window.addEventListener("pagehide", () => { ++generation; clearTimeout(timer); scanner?.release(); scanner = null; liveRoot = null; autoLiveAttempted = false; clearPreviews(); });
   window.addEventListener("pageshow", event => {
     if (event.persisted) chrome.storage.local.get("qrSettings").then(saved => apply(saved.qrSettings));
   });

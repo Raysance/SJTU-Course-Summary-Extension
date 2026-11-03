@@ -6,6 +6,7 @@ const vm = require("node:vm");
 const {parseHTML} = require("linkedom");
 const QR = require("../chrome-extension/qr-core.js");
 const platform = require("../chrome-extension/video-platform.js");
+const player = require("../chrome-extension/player-mode.js");
 const root = path.resolve(__dirname, "../chrome-extension");
 const read = file => fs.readFileSync(path.join(root, file), "utf8");
 const modern = "https://v.sjtu.edu.cn/jy-application-resourcemanage-ui/#/play-center?test";
@@ -46,8 +47,16 @@ test("preview copies the decoded canvas at a bounded size and never decodes anot
   } finally { Object.assign(global, saved); }
 });
 
-function contentHarness({deferred = false} = {}) {
-  const {window, document} = parseHTML('<html><head><title>直播</title></head><body><header><div class="tecl-info"><div class="top">高等数学</div></div></header><video id="teacher"></video><video id="slides"></video></body></html>');
+function contentHarness({deferred = false, mode = "live", purpose = "live"} = {}) {
+  const {window, document} = parseHTML(`<html><head><title>直播</title></head><body><div class="all-in-one-play-link"><header><div class="tecl-info"><div class="top">高等数学</div></div><div class="tab-wrapper"><div id="replay-tab" class="tab-item ${mode === "replay" ? "active" : ""}">点播</div><div id="live-tab" class="tab-item ${mode === "live" ? "active" : ""}">直播</div></div></header><div class="${mode === "live" ? "live-page-wrapper" : "video-page-wrapper"}"><video id="teacher"></video><video id="slides"></video></div></div></body></html>`);
+  const select = selected => {
+    document.getElementById("live-tab").classList.toggle("active", selected === "live");
+    document.getElementById("replay-tab").classList.toggle("active", selected === "replay");
+    document.querySelector(".live-page-wrapper, .video-page-wrapper").className = selected === "live" ? "live-page-wrapper" : "video-page-wrapper";
+  };
+  let liveClicks = 0;
+  document.getElementById("live-tab").click = () => { ++liveClicks; select("live"); };
+  document.getElementById("replay-tab").click = () => select("replay");
   const timers = [], messages = [];
   let listener, change, now = Date.now(), encodes = 0, finish;
   class Clock extends Date { static now() { return now; } }
@@ -63,11 +72,11 @@ function contentHarness({deferred = false} = {}) {
   }
   for (const video of document.querySelectorAll("video")) Object.assign(video, {readyState: 4, videoWidth: 1280, videoHeight: 720, paused: false, ended: false, currentSrc: `https://media.test/${video.id}`, srcObject: null});
   const chrome = {storage: {local: {get: async () => ({qrSettings: {enabled: true}})}, onChanged: {addListener: fn => { change = fn; }}},
-    runtime: {id: "test", onMessage: {addListener: fn => { listener = fn; }}, sendMessage: async message => { messages.push(message); return {alerts: []}; }}};
+    runtime: {id: "test", onMessage: {addListener: fn => { listener = fn; }}, sendMessage: async message => { messages.push(message); return message.action === "qrGetPlaybackPurpose" ? {purpose: await purpose} : {alerts: []}; }}};
   const context = vm.createContext({document, window, chrome, location: {href: modern}, Date: Clock,
-    SJTUQR: {...QR, Scanner}, setTimeout: fn => timers.push(fn), clearTimeout() {}});
+    SJTUQR: {...QR, Scanner}, SJTUPlayer: player, setTimeout: fn => timers.push(fn), clearTimeout() {}});
   vm.runInContext(read("qr-content.js"), context);
-  return {document, messages, context, get encodes() { return encodes; },
+  return {document, messages, context, select, get liveClicks() { return liveClicks; }, get encodes() { return encodes; },
     preview() { let result; listener({action: "qrGetFramePreviews"}, {}, value => { result = value; }); return plain(result); },
     async tick(ms = 1500) { now += ms; timers.splice(0).forEach(fn => fn()); await flush(); },
     disable() { change({qrSettings: {newValue: {enabled: false}}}, "local"); },
@@ -88,6 +97,43 @@ test("automatic previews are opt-in, cover multiple videos, and expire when the 
   assert.ok(app.preview().items.every(item => item.image === ""));
   app.disable();
   assert.deepEqual(app.preview().items, []);
+});
+
+test("reminders enter live once and do not fight a later manual switch to replay", async () => {
+  const app = contentHarness({mode: "replay"}); await flush();
+  assert.equal(app.liveClicks, 1);
+  assert.equal(app.messages.some(message => message.action === "qrScan"), false);
+  await app.tick();
+  assert.equal(app.messages.filter(message => message.action === "qrScan").length, 1);
+  app.select("replay"); await app.tick();
+  assert.equal(app.liveClicks, 1);
+  assert.equal(app.messages.filter(message => message.action === "qrScan").length, 1);
+  assert.equal(app.preview().items.length, 0);
+  app.select("live"); await app.tick();
+  assert.equal(app.messages.filter(message => message.action === "qrScan").length, 2);
+});
+
+test("a notebook replay page is not switched to live, including while its purpose is loading", async () => {
+  let resolvePurpose;
+  const purpose = new Promise(resolve => { resolvePurpose = resolve; });
+  const app = contentHarness({mode: "replay", purpose}); await flush();
+  assert.equal(app.liveClicks, 0);
+  resolvePurpose("replay"); await flush(); await app.tick();
+  assert.equal(app.liveClicks, 0);
+  assert.equal(app.messages.some(message => message.action === "qrScan"), false);
+  // A deliberate user switch to live is still respected on a notebook tab.
+  app.select("live"); await app.tick();
+  assert.equal(app.messages.filter(message => message.action === "qrScan").length, 1);
+});
+
+test("entering another class in the same player selects live again", async () => {
+  const app = contentHarness(); await flush();
+  app.select("replay"); await app.tick();
+  assert.equal(app.liveClicks, 0);
+  app.context.location.href = modern.replace("?test", "?another-class");
+  await app.tick();
+  assert.equal(app.liveClicks, 1);
+  assert.equal(app.document.getElementById("live-tab").classList.contains("active"), true);
 });
 
 test("paused, detached and changed sources never retain a previous screenshot", async () => {
@@ -128,7 +174,7 @@ function backgroundHarness({hanging = false, invalid = false} = {}) {
     notifications: {getPermissionLevel: async () => "granted", create: async () => {}, onClicked: {addListener() {}}},
     action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}}
   };
-  const context = vm.createContext({chrome, SJTUQR: QR, SJTUVideo: platform, crypto: require("node:crypto").webcrypto,
+  const context = vm.createContext({chrome, SJTUQR: QR, SJTUVideo: platform, SJTUPlayer: player, crypto: require("node:crypto").webcrypto,
     setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {}, console});
   vm.runInContext(read("qr-background.js"), context);
   const send = (action, sender = {url: "chrome-extension://test/app.html", tab: {id: 8}}, extra = {}) => new Promise(resolve => listener({action, ...extra}, sender, resolve));
@@ -147,6 +193,14 @@ test("preview relay targets the scanned frame and shared page, rejects foreign v
   assert.equal(JSON.stringify(app.store).includes("data:image"), false);
   const denied = await app.send("qrGetPreviews", {url: modern, tab: {id: 1}, frameId: 7});
   assert.match(denied.error, /来源无效/);
+});
+
+test("replay purpose is scoped to the sender tab or its opener, never a supplied unrelated tab", async () => {
+  const app = backgroundHarness();
+  app.store[player.purposeKey(8)] = "replay";
+  assert.equal((await app.send("qrGetPlaybackPurpose")).purpose, "replay");
+  assert.equal((await app.send("qrGetPlaybackPurpose", {url: modern, tab: {id: 10, openerTabId: 8}})).purpose, "replay");
+  assert.equal((await app.send("qrGetPlaybackPurpose", {url: modern, tab: {id: 11}}, {tabId: 8})).purpose, "live");
 });
 
 test("preview payloads exclude arbitrary image types and an unresponsive preview cannot delay QR alerts", async () => {

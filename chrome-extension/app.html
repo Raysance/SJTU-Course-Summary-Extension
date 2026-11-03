@@ -104,18 +104,11 @@
     <section class="card video-card">
       <div class="section-title">
         <div>
-          <span class="eyebrow">课堂视频</span>
+          <span class="eyebrow">回放笔记</span>
           <h2>概要生成</h2>
-          <p id="video-meta">选择课程后读取回放日期。</p>
+          <p id="video-meta">整理笔记时，点击“读取回放”。</p>
         </div>
-        <button id="refresh-video" class="icon-button secondary" aria-label="重新读取视频" title="重新读取视频" disabled>
-          <svg class="icon-refresh" viewBox="0 0 24 24" aria-hidden="true">
-            <path class="soft" d="M6.4 8.3A7.2 7.2 0 0 1 18 7.4"/>
-            <path class="strong" d="M18.2 4.7v3.8h-3.8"/>
-            <path class="soft" d="M17.6 15.7A7.2 7.2 0 0 1 6 16.6"/>
-            <path class="strong" d="M5.8 19.3v-3.8h3.8"/>
-          </svg>
-        </button>
+        <button id="refresh-video" class="secondary" disabled>读取回放</button>
       </div>
 
       <section class="workspace">
@@ -231,6 +224,7 @@
   </div>
 
   <script src="video-platform.js"></script>
+  <script src="player-mode.js"></script>
   <script src="qr-core.js"></script>
   <script src="qr-panel.js"></script>
   <script src="vendor/jsQR.js"></script>

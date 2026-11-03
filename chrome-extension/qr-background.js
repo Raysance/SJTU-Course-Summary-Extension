@@ -49,6 +49,13 @@
     return {items, hasMore: sources.length > 6 || results.some(result => result.status === "fulfilled" && result.value.hasMore)};
   }
 
+  async function getPlaybackPurpose(sender) {
+    const keys = [SJTUPlayer.purposeKey(sender.tab.id)];
+    if (Number.isInteger(sender.tab.openerTabId)) keys.push(SJTUPlayer.purposeKey(sender.tab.openerTabId));
+    const saved = await chrome.storage.session.get(keys);
+    return {purpose: keys.some(key => saved[key] === "replay") ? "replay" : "live"};
+  }
+
   async function playSound() {
     try {
       const url = chrome.runtime.getURL("qr-audio.html");
@@ -161,14 +168,15 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!["qrGetState", "qrGetPreviews", "qrSetSettings", "qrClearHistory", "qrTestAlert", "qrScan", "qrStatus"].includes(message?.action)) return false;
-    const privileged = !["qrScan", "qrStatus"].includes(message.action);
+    if (!["qrGetState", "qrGetPreviews", "qrGetPlaybackPurpose", "qrSetSettings", "qrClearHistory", "qrTestAlert", "qrScan", "qrStatus"].includes(message?.action)) return false;
+    const privileged = !["qrScan", "qrStatus", "qrGetPlaybackPurpose"].includes(message.action);
     if (!sender.tab || (privileged ? !extensionPage(sender) : !extensionPage(sender) && !videoPage(sender))) {
       sendResponse({error: "二维码监测请求来源无效。"});
       return false;
     }
-    const result = message.action === "qrGetPreviews" ? getPreviews() : queue.then(() => handle(message, sender));
-    if (message.action !== "qrGetPreviews") queue = result.catch(() => {});
+    const independent = ["qrGetPreviews", "qrGetPlaybackPurpose"].includes(message.action);
+    const result = message.action === "qrGetPreviews" ? getPreviews() : message.action === "qrGetPlaybackPurpose" ? getPlaybackPurpose(sender) : queue.then(() => handle(message, sender));
+    if (!independent) queue = result.catch(() => {});
     result.then(sendResponse, error => sendResponse({error: error.message}));
     return true;
   });
@@ -183,5 +191,8 @@
       await chrome.windows.update(tab.windowId, {focused: true});
       await chrome.notifications.clear(id);
     } catch { /* Clicking an old notification must not open the QR payload. */ }
+  });
+  chrome.tabs?.onRemoved?.addListener(tabId => {
+    chrome.storage.session.remove(SJTUPlayer.purposeKey(tabId)).catch(() => {});
   });
 })();

@@ -5,6 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const {parseHTML} = require("linkedom");
 const platform = require("../chrome-extension/video-platform.js");
+const player = require("../chrome-extension/player-mode.js");
 const qr = require("../chrome-extension/qr-core.js");
 const extension = path.resolve(__dirname, "../chrome-extension");
 const modern = "https://v.sjtu.edu.cn/jy-application-resourcemanage-ui/#/play-center?course-context";
@@ -34,11 +35,11 @@ function contentHarness(html = fixture, href = modern) {
     static now() { return now; }
   }
   const location = {href};
-  const context = vm.createContext({document, location, URL, Date: Clock, SJTUVideo: platform,
+  const context = vm.createContext({document, location, URL, Date: Clock, SJTUVideo: platform, SJTUPlayer: player,
     setTimeout: fn => timers.push(fn), chrome: {runtime: {onMessage: {addListener: fn => { listener = fn; }}}}});
   vm.runInContext(read("content.js"), context);
   return {
-    document, location,
+    document, location, context,
     send(message) { let response; const pending = listener(message, {}, value => { response = value; }); return {pending, response: () => response}; },
     tick(ms = 250) { now += ms; timers.splice(0).forEach(fn => fn()); }
   };
@@ -53,6 +54,19 @@ test("modern page lists playable records using minute-precision timestamps and c
   assert.equal(result.metadata.teacher, "教师甲");
   assert.ok(result.metadata.sourceKey);
   assert.equal(result.replays.length, 2);
+});
+
+test("a notebook request explicitly selects replay before reading the list", () => {
+  const app = contentHarness();
+  const shell = app.document.createElement("div");
+  shell.className = "all-in-one-play-link";
+  shell.innerHTML = '<header><div class="tab-wrapper"><div id="vod-mode" class="tab-item">点播</div><div id="live-mode" class="tab-item active">直播</div></div></header>';
+  app.document.body.prepend(shell);
+  const vod = app.document.getElementById("vod-mode");
+  vod.click = () => { vod.classList.add("active"); app.document.getElementById("live-mode").classList.remove("active"); };
+  assert.equal(app.send({action: "listReplays", purpose: "replay"}).response().replays.length, 0);
+  assert.equal(app.context.__SJTU_QR_PAGE_PURPOSE__, "replay");
+  assert.equal(app.send({action: "listReplays", purpose: "replay"}).response().replays.length, 2);
 });
 
 test("modern captions and outline exclude the independent search result panel", () => {
@@ -145,7 +159,7 @@ async function appHarness({tools, tabs, frameUrl = modern, missingScript = false
   const created = [], messages = [], injections = [], requests = [];
   let injected = !missingScript;
   const chrome = {
-    storage: {local: {get: async () => ({}), set: async () => {}}},
+    storage: {local: {get: async () => ({}), set: async () => {}}, session: {set: async () => {}}},
     runtime: {}, windows: {}, downloads: {},
     tabs: {
       create: async options => { created.push(options); return {id: 5, url: options.url}; },
@@ -165,7 +179,7 @@ async function appHarness({tools, tabs, frameUrl = modern, missingScript = false
         ...(unreadyFrame ? [{frameId: 9, result: {url: modern}}] : []), {frameId: 12, result: {url: frameUrl}}];
     }}
   };
-  const context = vm.createContext({chrome, SJTUVideo: platform, URL, URLSearchParams, location: {search: ""},
+  const context = vm.createContext({chrome, SJTUVideo: platform, SJTUPlayer: player, URL, URLSearchParams, location: {search: ""},
     document: {querySelector: element, querySelectorAll: () => [], addEventListener() {}},
     console: {error() {}, warn() {}}, setTimeout, clearTimeout,
     fetch: async url => {
@@ -192,6 +206,7 @@ test("course resolution uses real navigation after a tools API failure and targe
   assert.equal(page.frameId, 12);
   assert.equal(page.metadata.term, "2026 秋");
   assert.ok(app.messages.every(item => item.options.frameId === 12));
+  assert.ok(app.messages.every(item => item.message.purpose === "replay"));
   assert.deepEqual(Array.from(app.injections[0].target.frameIds), [12]);
   assert.ok(app.injections[0].files.includes("video-platform.js"));
 });
@@ -208,6 +223,24 @@ test("a legacy frame cannot supply replays through the modern resolver", async (
   app.context.testTab = {id: 5, url: "https://oc.sjtu.edu.cn/courses/94306/external_tools/909"};
   assert.equal(await vm.runInContext("readModernVideoPage(testTab)", app.context), null);
   assert.equal(app.messages.length, 0);
+});
+
+test("loading a course does not automatically open a VOD page", async () => {
+  const app = await appHarness();
+  app.context.calls = {files: 0, videos: 0};
+  await vm.runInContext(`
+    discoverCoursePages = async () => {
+      state.coursePages = [{key: "course", courseId: "94306", metadata: {course: "高等数学"}}];
+      state.selectedPageKey = "course";
+    };
+    renderCoursePages = () => {};
+    loadFiles = async () => { calls.files++; };
+    loadVideo = async () => { calls.videos++; };
+    loadCourse();
+  `, app.context);
+  assert.equal(app.context.calls.files, 1);
+  assert.equal(app.context.calls.videos, 0);
+  assert.equal(app.created.length, 0);
 });
 
 test("one unready modern frame does not hide the real player frame", async () => {

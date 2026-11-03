@@ -99,6 +99,14 @@
       sendResponse({error: "请从新版课堂视频读取。"});
       return false;
     }
+    if (message.purpose === "replay") {
+      globalThis.__SJTU_QR_PAGE_PURPOSE__ = "replay";
+      const playback = SJTUPlayer.inspect(document, location.href);
+      if (SJTUPlayer.select(playback, "replay") !== "ready") {
+        sendResponse(message.action === "listReplays" ? {replays: [], metadata: pageMetadata()} : {error: "正在切换到回放，请重新读取。"});
+        return false;
+      }
+    }
     const replays = replayRows();
     if (message.action === "listReplays") {
       sendResponse({replays, metadata: pageMetadata()});

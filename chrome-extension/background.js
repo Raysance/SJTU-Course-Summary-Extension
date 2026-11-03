@@ -1,4 +1,4 @@
-importScripts("video-platform.js", "qr-core.js", "qr-background.js");
+importScripts("video-platform.js", "player-mode.js", "qr-core.js", "qr-background.js");
 
 chrome.action.onClicked.addListener(async () => {
   const [activeTab] = await chrome.tabs.query({active: true, currentWindow: true});

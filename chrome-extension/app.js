@@ -374,7 +374,7 @@ async function sendToTab(tabId, message, frameId = 0) {
       throw error;
     }
     reportCaughtError("课堂视频页消息发送失败，正在注入内容脚本", error);
-    await chrome.scripting.executeScript({target: {tabId, frameIds: [frameId]}, files: ["video-platform.js", "content.js"]});
+    await chrome.scripting.executeScript({target: {tabId, frameIds: [frameId]}, files: ["video-platform.js", "player-mode.js", "content.js"]});
     return chrome.tabs.sendMessage(tabId, message, {frameId});
   }
 }
@@ -394,7 +394,7 @@ async function sendToFilesTab(tabId, message) {
 }
 
 async function send(message) {
-  return sendToTab(state.tab.id, {...message, sourceKey: state.sourceKey}, state.frameId);
+  return sendToTab(state.tab.id, {...message, purpose: "replay", sourceKey: state.sourceKey}, state.frameId);
 }
 
 async function discoverCoursePages() {
@@ -467,6 +467,7 @@ async function resolveCoursePage(page) {
   page.canvasUrl = entry.url;
   log(`正在打开 ${page.metadata.course || "课程"} 的课堂视频入口…`);
   const tab = await chrome.tabs.create({url: page.canvasUrl, active: false});
+  await chrome.storage.session.set({[SJTUPlayer.purposeKey(tab.id)]: "replay"});
   await chrome.tabs.update(tab.id, {muted: true}).catch(error => reportCaughtError("课堂视频标签页静音失败", error));
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
@@ -478,6 +479,7 @@ async function resolveCoursePage(page) {
     const children = await chrome.tabs.query({url: "https://v.sjtu.edu.cn/jy-application-resourcemanage-ui/*"});
     const candidates = [current, ...children.filter(candidate => candidate.openerTabId === tab.id && candidate.id !== tab.id)];
     for (const candidate of candidates) {
+      if (candidate.id !== tab.id) await chrome.storage.session.set({[SJTUPlayer.purposeKey(candidate.id)]: "replay"});
       const resolved = await readModernVideoPage(candidate).catch(() => null);
       if (resolved) {
         await chrome.tabs.update(candidate.id, {muted: true}).catch(error => reportCaughtError("课堂视频标签页静音失败", error));
@@ -500,7 +502,7 @@ async function readModernVideoPage(tab) {
   for (const frame of frames) {
     if (!SJTUVideo.isModernUrl(frame.result?.url)) continue;
     try {
-      const reply = await sendToTab(tab.id, {action: "listReplays"}, frame.frameId);
+      const reply = await sendToTab(tab.id, {action: "listReplays", purpose: "replay"}, frame.frameId);
       if (!reply?.replays?.length || reply.metadata?.platform !== "resourcemanage") continue;
       return {tab, frameId: frame.frameId, replays: reply.replays, metadata: reply.metadata, sourceKey: reply.metadata.sourceKey};
     } catch (error) {
@@ -533,7 +535,7 @@ async function loadCourse() {
       $("#clear-days").disabled = true;
       updateVideoControls();
       progress(0, count, "等待选择课程");
-      $("#video-meta").textContent = "选择课程后读取课堂视频。";
+      $("#video-meta").textContent = "整理笔记时，点击“读取回放”。";
       $("#log").textContent = "已完成课程识别，请在顶部选择课程。";
       return;
     }
@@ -542,14 +544,13 @@ async function loadCourse() {
     state.metadata = page.metadata || {};
     $("#course").textContent = currentCourseName("SJTU 课程");
     $("#meta").textContent = `${currentCourseTerm() || "学期信息未显示"} · 文件打包与视频概要已分模块处理`;
-    resetVideoModule("等待读取课堂视频。");
+    resetVideoModule("整理笔记时，点击右侧“读取回放”。");
     state.files = [];
     state.selectedFileIds.clear();
     renderFiles();
     await loadFiles({quiet: true});
-    await loadVideo({quiet: true});
-    $("#meta").textContent = `${currentCourseTerm() || "学期信息未显示"} · ${state.files.length} 个文件 · ${state.replays.length} 个回放`;
-    $("#log").textContent = "课程读取成功。文件下载与视频概要可分别操作。";
+    $("#meta").textContent = `${currentCourseTerm() || "学期信息未显示"} · ${state.files.length} 个文件`;
+    $("#log").textContent = "课程已读取。整理课堂笔记时，点击“读取回放”。";
   } catch (error) {
     reportCaughtError("课程读取失败", error);
     $("#course").textContent = "未连接到课程页面";

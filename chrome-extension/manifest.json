@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SJTU 课程资料助手",
-  "version": "4.9.3",
+  "version": "4.9.4",
   "minimum_chrome_version": "116",
   "description": "读取 SJTU 课堂字幕、打包课程文件，并在本地轻量监测直播二维码，及时提醒。",
   "permissions": ["downloads", "storage", "tabs", "scripting", "webRequest", "notifications", "offscreen"],
@@ -23,7 +23,7 @@
   "content_scripts": [
     {
       "matches": ["https://v.sjtu.edu.cn/jy-application-resourcemanage-ui/*", "https://oc.sjtu.edu.cn/courses/*"],
-      "js": ["vendor/jsQR.js", "qr-core.js", "qr-content.js"],
+      "js": ["player-mode.js", "vendor/jsQR.js", "qr-core.js", "qr-content.js"],
       "all_frames": true,
       "run_at": "document_idle"
     },
@@ -31,7 +31,7 @@
       "matches": [
         "https://v.sjtu.edu.cn/jy-application-resourcemanage-ui/*"
       ],
-      "js": ["video-platform.js", "content.js"],
+      "js": ["video-platform.js", "player-mode.js", "content.js"],
       "all_frames": true,
       "run_at": "document_idle"
     },
