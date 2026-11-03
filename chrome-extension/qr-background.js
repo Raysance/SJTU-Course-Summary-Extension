@@ -11,6 +11,44 @@
     return SJTUVideo.isModernUrl(sender.url || "") || Boolean(SJTUVideo.courseIdFromUrl(sender.url || ""));
   }
 
+  async function previewRequest(source) {
+    let timer;
+    try {
+      const shared = source.key.endsWith(":shared");
+      const frameId = source.frameId ?? Number(source.key.split(":").at(-1));
+      if (!shared && (!Number.isInteger(frameId) || frameId < 0)) return {items: []};
+      const request = shared
+        ? chrome.runtime.sendMessage({target: "qr-preview", action: "qrGetSharedPreview", tabId: source.tabId})
+        : chrome.tabs.sendMessage(source.tabId, {action: "qrGetFramePreviews"}, {frameId});
+      const result = await Promise.race([request, new Promise(resolve => { timer = setTimeout(() => resolve(null), 2000); })]);
+      if (!Array.isArray(result?.items)) return {items: []};
+      const items = result.items.filter(item => item && typeof item === "object").slice(0, 4).map((item, index) => {
+        const image = typeof item.image === "string" && item.image.length <= 200000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(item.image) ? item.image : "";
+        return {
+          id: `${source.key}:${String(item.id || index).slice(0, 40)}`, tabId: source.tabId,
+          title: String(item.title || source.title || "直播画面").slice(0, 160),
+          label: String(item.label || "直播画面").slice(0, 40), image,
+          capturedAt: image && Number.isFinite(item.capturedAt) && item.capturedAt > 0 && item.capturedAt <= Date.now() + 1000 ? item.capturedAt : 0,
+          hasCode: Boolean(image && item.hasCode)
+        };
+      }).filter(item => !item.image || item.capturedAt);
+      return {items, hasMore: result.hasMore === true};
+    } catch { return {items: []}; }
+    finally { clearTimeout(timer); }
+  }
+
+  async function getPreviews() {
+    const {qrSettings} = await chrome.storage.local.get("qrSettings");
+    if (!settings(qrSettings).enabled) return {items: [], hasMore: false};
+    const {qrState} = await chrome.storage.session.get("qrState");
+    const sources = Object.values(qrState?.sources || {}).filter(source => source.state === "monitoring" && Date.now() - source.checkedAt <= 45000)
+      .sort((a, b) => b.checkedAt - a.checkedAt);
+    const results = await Promise.allSettled(sources.slice(0, 6).map(previewRequest));
+    const items = results.flatMap(result => result.status === "fulfilled" ? result.value.items : []);
+    // Images are relayed only to the visible extension page, never persisted.
+    return {items, hasMore: sources.length > 6 || results.some(result => result.status === "fulfilled" && result.value.hasMore)};
+  }
+
   async function playSound() {
     try {
       const url = chrome.runtime.getURL("qr-audio.html");
@@ -99,7 +137,7 @@
     const isShared = extensionPage(sender);
     const sourceKey = `${sender.tab.id}:${isShared ? "shared" : sender.frameId}`;
     state.sources[sourceKey] = {
-      key: sourceKey, tabId: sender.tab.id, title: String(message.title || sender.tab.title || "直播画面").slice(0, 160),
+      key: sourceKey, tabId: sender.tab.id, frameId: sender.frameId, title: String(message.title || sender.tab.title || "直播画面").slice(0, 160),
       state: ["monitoring", "waiting", "blocked", "error", "stopped"].includes(message.state) ? message.state : "monitoring",
       detail: String(message.detail || "").slice(0, 300), checkedAt: now
     };
@@ -123,14 +161,14 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!["qrGetState", "qrSetSettings", "qrClearHistory", "qrTestAlert", "qrScan", "qrStatus"].includes(message?.action)) return false;
+    if (!["qrGetState", "qrGetPreviews", "qrSetSettings", "qrClearHistory", "qrTestAlert", "qrScan", "qrStatus"].includes(message?.action)) return false;
     const privileged = !["qrScan", "qrStatus"].includes(message.action);
     if (!sender.tab || (privileged ? !extensionPage(sender) : !extensionPage(sender) && !videoPage(sender))) {
       sendResponse({error: "二维码监测请求来源无效。"});
       return false;
     }
-    const result = queue.then(() => handle(message, sender));
-    queue = result.catch(() => {});
+    const result = message.action === "qrGetPreviews" ? getPreviews() : queue.then(() => handle(message, sender));
+    if (message.action !== "qrGetPreviews") queue = result.catch(() => {});
     result.then(sendResponse, error => sendResponse({error: error.message}));
     return true;
   });

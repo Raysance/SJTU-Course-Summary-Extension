@@ -54,6 +54,10 @@
       this.count = 0;
       this.durationMs = 0;
       this.initialized = false;
+      this.capturedAt = 0;
+      this.mediaTime = 0;
+      this.busy = false;
+      this.previewCanvas = null;
     }
 
     async init() {
@@ -81,6 +85,9 @@
         this.canvas.height = height;
       }
       this.context.drawImage(video, 0, 0, width, height);
+      this.capturedAt = Date.now();
+      this.mediaTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      this.busy = true;
       try {
         if (this.detector) {
           try {
@@ -98,7 +105,22 @@
         return code?.data ? [code.data] : [];
       } finally {
         this.durationMs = Math.round(performance.now() - start);
+        this.busy = false;
       }
+    }
+
+    preview() {
+      if (this.busy || !this.capturedAt || this.canvas.width < 2 || this.canvas.height < 2) return null;
+      try {
+        this.previewCanvas ||= document.createElement("canvas");
+        const scale = Math.min(1, 480 / Math.max(this.canvas.width, this.canvas.height));
+        this.previewCanvas.width = Math.max(1, Math.round(this.canvas.width * scale));
+        this.previewCanvas.height = Math.max(1, Math.round(this.canvas.height * scale));
+        this.previewCanvas.getContext("2d").drawImage(this.canvas, 0, 0, this.previewCanvas.width, this.previewCanvas.height);
+        const image = this.previewCanvas.toDataURL("image/jpeg", 0.6);
+        if (image.length > 200000) return null;
+        return {image, capturedAt: this.capturedAt, mediaTime: this.mediaTime};
+      } catch { return null; }
     }
 
     delay(config) {
@@ -108,6 +130,8 @@
 
     release() {
       this.canvas.width = this.canvas.height = 1;
+      if (this.previewCanvas) this.previewCanvas.width = this.previewCanvas.height = 1;
+      this.capturedAt = 0;
       this.detector = null;
     }
   }

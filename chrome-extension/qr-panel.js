@@ -6,6 +6,67 @@
   let sharing = false;
   let pending = false;
   let lastHistory = "";
+  let previewLoading = false;
+  let lastPreviews = "";
+
+  function clearPreviews() {
+    lastPreviews = "";
+    find("qr-preview").classList.add("hidden");
+    find("qr-preview-grid").replaceChildren();
+    find("qr-preview-note").textContent = "";
+  }
+
+  function renderPreviews(result) {
+    const signature = JSON.stringify(result);
+    if (signature === lastPreviews) return;
+    lastPreviews = signature;
+    const root = find("qr-preview-grid");
+    root.replaceChildren();
+    const items = result.items || [];
+    find("qr-preview-empty").classList.toggle("hidden", items.length > 0);
+    find("qr-preview-note").textContent = result.hasMore ? "还有其他画面正在监测" : items.length > 1 ? `${items.length} 个画面 · 自动更新` : items.length ? "自动更新" : "";
+    for (const item of items) {
+      const figure = document.createElement("figure");
+      figure.className = "qr-preview-frame";
+      const caption = document.createElement("figcaption");
+      const title = document.createElement("strong");
+      title.textContent = `${item.title} · ${item.label}`;
+      caption.append(title);
+      if (item.image && item.capturedAt) {
+        const img = document.createElement("img");
+        img.src = item.image;
+        img.alt = `${item.title}最近检查的${item.label}`;
+        figure.append(img);
+        const checked = document.createElement("span");
+        checked.textContent = `最近检查 ${new Date(item.capturedAt).toLocaleTimeString()}`;
+        const result = document.createElement("span");
+        result.className = `qr-preview-result${item.hasCode ? " detected" : ""}`;
+        result.textContent = item.hasCode ? "本次识别到二维码" : "本次未识别到二维码";
+        caption.append(checked, result);
+      } else {
+        const waiting = document.createElement("div");
+        waiting.className = "qr-preview-pending";
+        waiting.textContent = "等待下一次检查…";
+        figure.append(waiting);
+      }
+      figure.append(caption);
+      root.append(figure);
+    }
+  }
+
+  async function refreshPreviews(enabled, started) {
+    if (!enabled) { clearPreviews(); return; }
+    find("qr-preview").classList.remove("hidden");
+    if (document.hidden || previewLoading) return;
+    previewLoading = true;
+    try {
+      const result = await request("qrGetPreviews");
+      if (started !== revision || document.hidden) return;
+      renderPreviews(result);
+    } catch {
+      if (started === revision) renderPreviews({items: []});
+    } finally { previewLoading = false; }
+  }
 
   function feedback(text = "", error = false) {
     const node = find("qr-feedback");
@@ -86,6 +147,7 @@
       else text = waited ? "还没找到直播，你可以选择正在播放的画面。" : "已开启，等待直播播放。";
       if (root.textContent !== text) root.textContent = text;
       renderHistory(result.recent);
+      await refreshPreviews(enabled, started);
     } catch (error) {
       console.warn("二维码提醒暂不可用", error);
       feedback("暂时无法更新，请重新加载扩展后重试。", true);
@@ -95,6 +157,7 @@
   find("qr-enabled")?.addEventListener("change", async () => {
     ++revision;
     waitingSince = 0;
+    if (!find("qr-enabled").checked) clearPreviews();
     feedback();
     try {
       // One user choice; use the same automatic policy on every start.
@@ -115,7 +178,7 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.qrSettings) { ++revision; refresh(); }
   });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  document.addEventListener("visibilitychange", () => { ++revision; if (!document.hidden) refresh(); });
   setInterval(() => { if (!document.hidden) refresh(); }, 3000);
   refresh();
 })();

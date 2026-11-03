@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SJTU 课程资料助手",
-  "version": "4.9.2",
+  "version": "4.9.3",
   "minimum_chrome_version": "116",
   "description": "读取 SJTU 课堂字幕、打包课程文件，并在本地轻量监测直播二维码，及时提醒。",
   "permissions": ["downloads", "storage", "tabs", "scripting", "webRequest", "notifications", "offscreen"],

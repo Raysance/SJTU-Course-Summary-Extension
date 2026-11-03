@@ -8,11 +8,16 @@
       <h2 id="qr-title">选择直播画面，剩下的交给我</h2>
       <div id="qr-sources" class="qr-sources" role="status">选择正在播放的直播画面即可开始提醒。</div>
       <p id="share-status" class="qr-help hidden" role="status"></p>
+      <section id="qr-preview" class="qr-preview hidden" aria-labelledby="qr-preview-title">
+        <div class="qr-preview-head"><strong id="qr-preview-title">当前监测画面</strong><span id="qr-preview-note"></span></div>
+        <div id="qr-preview-grid" class="qr-preview-grid"></div>
+        <p id="qr-preview-empty">等待读取直播画面…</p>
+      </section>
       <div id="qr-capture-actions" class="qr-actions">
         <button id="share-start" class="primary">选择直播画面</button>
         <button id="share-stop" class="secondary hidden" disabled>停止共享</button>
       </div>
-      <video id="share-video" autoplay muted playsinline class="hidden"></video>
+      <video id="share-video" autoplay muted playsinline class="hidden" aria-hidden="true"></video>
       <p id="share-result" class="qr-help hidden" role="alert"></p>
       <p id="qr-feedback" class="qr-feedback hidden" role="status"></p>
       <p class="qr-help">选择后请保留此页面，并让直播继续播放。</p>

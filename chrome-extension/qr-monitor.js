@@ -11,6 +11,10 @@
   let generation = 0;
   let settingsRevision = 0;
   let pending = false;
+  let ownTabId;
+  let previewUntil = 0;
+  let lastPreview = null;
+  const tabReady = chrome.tabs.getCurrent().then(tab => { ownTabId = tab?.id; });
 
   function sharingState(active, pending = false, message = "", error = false) {
     document.dispatchEvent(new CustomEvent("sjtu-qr-sharing", {detail: {active, pending, message, error}}));
@@ -26,6 +30,8 @@
     result.classList.add("hidden");
     scanner?.release();
     scanner = null;
+    previewUntil = 0;
+    lastPreview = null;
     start.disabled = false;
     stop.disabled = true;
     status.textContent = text;
@@ -38,10 +44,15 @@
     let delay = config.intervalMs;
     try {
       if (video.readyState < 2) {
+        lastPreview = null;
         status.textContent = "正在连接直播画面…";
       } else {
         const values = await scanner.scan(video);
         if (token !== generation) return;
+        if (Date.now() < previewUntil) {
+          const preview = scanner.preview();
+          lastPreview = preview ? {...preview, hasCode: values.length > 0} : null;
+        } else lastPreview = null;
         delay = scanner.delay(config);
         const detail = `${scanner.engine} · 检查间隔 ${(delay / 1000).toFixed(1)} 秒 · 上次解码 ${scanner.durationMs} ms`;
         status.textContent = "正在监测这段直播，二维码出现时会提醒你。";
@@ -80,8 +91,8 @@
       stream = selected;
       video.srcObject = stream;
       stream.getVideoTracks()[0].addEventListener("ended", () => stopSharing(), {once: true});
-      video.classList.remove("hidden");
       await video.play();
+      await tabReady;
       const saved = await chrome.runtime.sendMessage({action: "qrSetSettings", settings: {...SJTUQR.DEFAULTS, enabled: true}});
       if (saved?.error) throw new Error(saved.error);
       if (token !== generation) return;
@@ -102,6 +113,14 @@
     }
   });
   stop.addEventListener("click", () => stopSharing());
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.target !== "qr-preview" || message.action !== "qrGetSharedPreview" || message.tabId !== ownTabId) return false;
+    if (!config.enabled || !stream || video.readyState < 2 || video.paused) { lastPreview = null; sendResponse({items: []}); return false; }
+    previewUntil = Date.now() + 10000;
+    sendResponse({items: [{id: "shared", title: "已选择的直播画面", label: "共享画面",
+      image: lastPreview?.image || "", capturedAt: lastPreview?.capturedAt || 0, hasCode: lastPreview?.hasCode === true}]});
+    return false;
+  });
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local" || !changes.qrSettings) return;
     ++settingsRevision;

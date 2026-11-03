@@ -11,11 +11,28 @@
   let lastStatus = "";
   let lastReport = 0;
   let toast;
+  let previewUntil = 0;
+  let nextVideoId = 0;
+  const videoIds = new WeakMap();
+  const previews = new Map();
   // Do not repeatedly read a tainted canvas or retry it on every tick.
   const blocked = new WeakMap();
 
+  function pageTitle() {
+    return document.querySelector("header .tecl-info .top")?.textContent.trim() || document.title;
+  }
+
+  function activeVideos() {
+    return [...document.querySelectorAll("video")].filter(video => video.isConnected && video.readyState >= 2 && video.videoWidth >= 64 && !video.paused && !video.ended);
+  }
+
+  function clearPreviews() {
+    previewUntil = 0;
+    previews.clear();
+  }
+
   async function send(message) {
-    return chrome.runtime.sendMessage({...message, title: document.title});
+    return chrome.runtime.sendMessage({...message, title: pageTitle()});
   }
 
   async function status(state, detail) {
@@ -60,7 +77,9 @@
     scanning = true;
     let delay = config.intervalMs;
     try {
-      const videos = [...document.querySelectorAll("video")].filter(video => video.isConnected && video.readyState >= 2 && video.videoWidth >= 64 && !video.paused && !video.ended);
+      const videos = activeVideos();
+      if (Date.now() >= previewUntil) previews.clear();
+      for (const video of previews.keys()) if (!videos.includes(video)) previews.delete(video);
       const available = videos.filter(video => {
         const previous = blocked.get(video);
         return !previous || previous.src !== video.currentSrc || previous.stream !== video.srcObject;
@@ -72,6 +91,7 @@
       } else {
         scanner ||= new SJTUQR.Scanner();
         const video = available[cursor++ % available.length];
+        const input = {src: video.currentSrc, stream: video.srcObject, href: location.href, title: pageTitle()};
         let values;
         try {
           values = await scanner.scan(video);
@@ -84,6 +104,15 @@
           return;
         }
         if (token !== generation) return;
+        if (!video.isConnected || video.paused || video.ended || input.src !== video.currentSrc || input.stream !== video.srcObject || input.href !== location.href || input.title !== pageTitle()) {
+          previews.delete(video);
+          return;
+        }
+        if (Date.now() < previewUntil) {
+          const preview = scanner.preview();
+          if (preview) previews.set(video, {...preview, hasCode: values.length > 0, title: pageTitle(), currentSrc: video.currentSrc, stream: video.srcObject, href: location.href});
+          else previews.delete(video);
+        }
         delay = scanner.delay(config);
         const result = await send({action: "qrScan", values, state: "monitoring", detail: `${scanner.engine} · 检查间隔 ${(delay / 1000).toFixed(1)} 秒 · 上次解码 ${scanner.durationMs} ms`});
         if (token !== generation || !config.enabled) return;
@@ -109,6 +138,7 @@
     } else {
       scanner?.release();
       scanner = null;
+      clearPreviews();
       toast?.remove();
     }
   }
@@ -119,11 +149,31 @@
       apply(changes.qrSettings.newValue);
     }
   });
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.action !== "qrGetFramePreviews") return false;
+    if (!config.enabled) { sendResponse({items: []}); return false; }
+    previewUntil = Date.now() + 10000;
+    const allVideos = activeVideos().filter(video => {
+      const previous = blocked.get(video);
+      return !previous || previous.src !== video.currentSrc || previous.stream !== video.srcObject;
+    });
+    const videos = allVideos.slice(0, 4);
+    const items = videos.map((video, index) => {
+      if (!videoIds.has(video)) videoIds.set(video, `video-${++nextVideoId}`);
+      const cached = previews.get(video);
+      const valid = cached && cached.currentSrc === video.currentSrc && cached.stream === video.srcObject && cached.href === location.href && cached.title === pageTitle();
+      return {id: videoIds.get(video), title: pageTitle(), label: videos.length > 1 ? `画面 ${index + 1}` : "直播画面",
+        image: valid ? cached.image : "", capturedAt: valid ? cached.capturedAt : 0,
+        hasCode: valid && cached.hasCode};
+    });
+    sendResponse({items, hasMore: allVideos.length > videos.length});
+    return false;
+  });
   const initialRevision = settingsRevision;
   chrome.storage.local.get("qrSettings").then(saved => {
     if (settingsRevision === initialRevision) apply(saved.qrSettings);
   });
-  window.addEventListener("pagehide", () => { ++generation; clearTimeout(timer); scanner?.release(); scanner = null; });
+  window.addEventListener("pagehide", () => { ++generation; clearTimeout(timer); scanner?.release(); scanner = null; clearPreviews(); });
   window.addEventListener("pageshow", event => {
     if (event.persisted) chrome.storage.local.get("qrSettings").then(saved => apply(saved.qrSettings));
   });
