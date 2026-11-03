@@ -1,6 +1,8 @@
 const $ = selector => document.querySelector(selector);
 const state = {
   tab: null,
+  frameId: 0,
+  sourceKey: "",
   coursePages: [],
   selectedPageKey: null,
   replays: [],
@@ -43,7 +45,6 @@ const PROVIDERS = {
   }
 };
 
-const CLASS_VIDEO_TOOL_ID = "8329";
 const REQUESTED_COURSE_ID = new URLSearchParams(location.search).get("courseId") || "";
 
 const PROMPT_TEMPLATES = {
@@ -199,11 +200,11 @@ function wait(ms) {
 
 function classVideoLink(course) {
   return {
-    url: `https://oc.sjtu.edu.cn/courses/${course.id}/external_tools/${CLASS_VIDEO_TOOL_ID}?display=borderless`,
+    url: "",
     course: course.course || course.name || `课程 ${course.id}`,
     courseId: String(course.id),
     term: course.term || "",
-    label: "课堂视频new"
+    label: "课堂视频"
   };
 }
 
@@ -364,17 +365,17 @@ async function filesTab(courseId, {reuse = true} = {}) {
   return chrome.tabs.create({url, active: false});
 }
 
-async function sendToTab(tabId, message) {
+async function sendToTab(tabId, message, frameId = 0) {
   try {
-    return await chrome.tabs.sendMessage(tabId, message);
+    return await chrome.tabs.sendMessage(tabId, message, {frameId});
   } catch (error) {
     if (!error.message?.includes("Receiving end does not exist")) {
       reportCaughtError("课堂视频页消息发送失败", error);
       throw error;
     }
     reportCaughtError("课堂视频页消息发送失败，正在注入内容脚本", error);
-    await chrome.scripting.executeScript({target: {tabId}, files: ["content.js"]});
-    return chrome.tabs.sendMessage(tabId, message);
+    await chrome.scripting.executeScript({target: {tabId, frameIds: [frameId]}, files: ["video-platform.js", "content.js"]});
+    return chrome.tabs.sendMessage(tabId, message, {frameId});
   }
 }
 
@@ -393,7 +394,7 @@ async function sendToFilesTab(tabId, message) {
 }
 
 async function send(message) {
-  return sendToTab(state.tab.id, message);
+  return sendToTab(state.tab.id, {...message, sourceKey: state.sourceKey}, state.frameId);
 }
 
 async function discoverCoursePages() {
@@ -443,7 +444,27 @@ function renderCoursePages() {
 }
 
 async function resolveCoursePage(page) {
-  if (page.tab?.id && page.replays?.length) return page;
+  if (page.tab?.id) {
+    const current = await readModernVideoPage(page.tab).catch(() => null);
+    if (current && current.metadata.sourceKey === page.sourceKey) {
+      Object.assign(page, {...current, metadata: {...page.metadata, ...current.metadata}});
+      return page;
+    }
+    page.tab = null;
+    page.replays = [];
+  }
+  // Discover only the selected course's real navigation; missing video access
+  // must not prevent course files from being read.
+  const results = await Promise.allSettled([
+    fetchCanvasApiPages(`https://oc.sjtu.edu.cn/api/v1/courses/${page.courseId}/external_tools/visible_course_nav_tools?per_page=100`, 5),
+    fetchCanvasApiPages(`https://oc.sjtu.edu.cn/api/v1/courses/${page.courseId}/tabs?per_page=100`, 5)
+  ]);
+  const entry = SJTUVideo.chooseCourseEntry(page.courseId, {
+    tools: results[0].status === "fulfilled" ? results[0].value : [],
+    tabs: results[1].status === "fulfilled" ? results[1].value : []
+  });
+  if (!entry) throw new Error("未找到这门课的新版课堂视频入口，请确认课程已开放课堂实录。");
+  page.canvasUrl = entry.url;
   log(`正在打开 ${page.metadata.course || "课程"} 的课堂视频入口…`);
   const tab = await chrome.tabs.create({url: page.canvasUrl, active: false});
   await chrome.tabs.update(tab.id, {muted: true}).catch(error => reportCaughtError("课堂视频标签页静音失败", error));
@@ -454,23 +475,39 @@ async function resolveCoursePage(page) {
       return null;
     });
     if (!current) throw new Error("课堂视频标签页已关闭。");
-    if (current.url?.includes("v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/")) {
-      await chrome.tabs.update(current.id, {muted: true}).catch(error => reportCaughtError("课堂视频标签页静音失败", error));
-      try {
-        const reply = await sendToTab(current.id, {action: "listReplays"});
-        if (reply?.replays?.length) {
-          page.tab = current;
-          page.replays = reply.replays;
-          page.metadata = {...page.metadata, ...(reply.metadata || {})};
-          return page;
-        }
-      } catch (error) {
-        reportCaughtError("课堂视频页脚本暂未响应", error);
+    const children = await chrome.tabs.query({url: "https://v.sjtu.edu.cn/jy-application-resourcemanage-ui/*"});
+    const candidates = [current, ...children.filter(candidate => candidate.openerTabId === tab.id && candidate.id !== tab.id)];
+    for (const candidate of candidates) {
+      const resolved = await readModernVideoPage(candidate).catch(() => null);
+      if (resolved) {
+        await chrome.tabs.update(candidate.id, {muted: true}).catch(error => reportCaughtError("课堂视频标签页静音失败", error));
+        page.metadata = {...page.metadata, ...resolved.metadata};
+        Object.assign(page, {...resolved, metadata: page.metadata});
+        return page;
       }
     }
     await wait(1000);
   }
-  throw new Error("已找到课堂视频入口，但视频页未在 45 秒内加载出回放列表。");
+  throw new Error("已打开新版课堂视频入口，但暂未读到回放，请确认已登录且课程已有录像。");
+}
+
+async function readModernVideoPage(tab) {
+  if (!SJTUVideo.isModernUrl(tab.url) && !SJTUVideo.courseIdFromUrl(tab.url)) return null;
+  const frames = await chrome.scripting.executeScript({
+    target: {tabId: tab.id, allFrames: true},
+    func: () => ({url: location.href})
+  });
+  for (const frame of frames) {
+    if (!SJTUVideo.isModernUrl(frame.result?.url)) continue;
+    try {
+      const reply = await sendToTab(tab.id, {action: "listReplays"}, frame.frameId);
+      if (!reply?.replays?.length || reply.metadata?.platform !== "resourcemanage") continue;
+      return {tab, frameId: frame.frameId, replays: reply.replays, metadata: reply.metadata, sourceKey: reply.metadata.sourceKey};
+    } catch (error) {
+      reportCaughtError("新版视频的一个子页面暂未就绪", error);
+    }
+  }
+  return null;
 }
 
 async function loadCourse() {
@@ -568,6 +605,8 @@ function updateVideoControls() {
 
 function resetVideoModule(message = "等待课堂视频。") {
   state.tab = null;
+  state.frameId = 0;
+  state.sourceKey = "";
   state.replays = [];
   state.previewCache.clear();
   renderDayChecks(new Map());
@@ -597,6 +636,8 @@ async function loadVideo({quiet = false} = {}) {
     renderCoursePages();
     if (!page.replays?.length) throw new Error("页面尚未加载出回放列表，请稍后重试。");
     state.tab = page.tab;
+    state.frameId = page.frameId;
+    state.sourceKey = page.sourceKey;
     state.replays = page.replays;
     state.metadata = {...state.metadata, ...(page.metadata || {})};
     const grouped = groupReplays(state.replays);
@@ -1224,8 +1265,13 @@ async function collect(replays, options = {}) {
       log(`读取 ${replay.time}…`);
     }
     try {
-      const reply = await send({action: "extractCaptions", time: replay.time});
+      const reply = await send({action: "extractCaptions", time: replay.time, id: replay.id, label: replay.label});
       if (reply?.error) throw new Error(reply.error);
+      if (reply?.sourceKey) {
+        state.sourceKey = reply.sourceKey;
+        const page = selectedCoursePage();
+        if (page) page.sourceKey = reply.sourceKey;
+      }
       if (!reply?.captions?.length && !reply?.platformSummary?.overview) {
         throw new Error("没有字幕或概要");
       }

@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "SJTU 课程资料助手",
-  "version": "4.8.7",
-  "description": "从 SJTU Canvas 自动读取课堂视频字幕生成笔记，并识别课程文件，支持勾选后一键打包下载 ZIP。",
-  "permissions": ["downloads", "storage", "tabs", "scripting", "webRequest"],
+  "version": "4.9.2",
+  "minimum_chrome_version": "116",
+  "description": "读取 SJTU 课堂字幕、打包课程文件，并在本地轻量监测直播二维码，及时提醒。",
+  "permissions": ["downloads", "storage", "tabs", "scripting", "webRequest", "notifications", "offscreen"],
   "host_permissions": [
     "https://oc.sjtu.edu.cn/*",
     "https://s3.jcloud.sjtu.edu.cn/*",
-    "https://v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/*",
+    "https://v.sjtu.edu.cn/jy-application-resourcemanage-ui/*",
     "https://api.deepseek.com/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
@@ -21,10 +22,17 @@
   },
   "content_scripts": [
     {
+      "matches": ["https://v.sjtu.edu.cn/jy-application-resourcemanage-ui/*", "https://oc.sjtu.edu.cn/courses/*"],
+      "js": ["vendor/jsQR.js", "qr-core.js", "qr-content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
       "matches": [
-        "https://v.sjtu.edu.cn/jy-application-canvas-sjtu-ui/*"
+        "https://v.sjtu.edu.cn/jy-application-resourcemanage-ui/*"
       ],
-      "js": ["content.js"],
+      "js": ["video-platform.js", "content.js"],
+      "all_frames": true,
       "run_at": "document_idle"
     },
     {

@@ -1,6 +1,8 @@
+importScripts("video-platform.js", "qr-core.js", "qr-background.js");
+
 chrome.action.onClicked.addListener(async () => {
   const [activeTab] = await chrome.tabs.query({active: true, currentWindow: true});
-  const courseId = activeTab?.url?.match(/^https:\/\/oc\.sjtu\.edu\.cn\/courses\/(\d+)\/files\b/)?.[1] || "";
+  const courseId = SJTUVideo.courseIdFromUrl(activeTab?.url || "");
   const url = chrome.runtime.getURL(`app.html${courseId ? `?courseId=${encodeURIComponent(courseId)}` : ""}`);
   const existing = await chrome.tabs.query({url: chrome.runtime.getURL("app.html*")});
   if (existing.length) {

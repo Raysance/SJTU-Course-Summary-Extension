@@ -96,6 +96,28 @@ pre { flex: 1; min-height: 310px; margin: 0; overflow: auto; white-space: pre-wr
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: #13213d33; backdrop-filter: blur(10px); }
 .settings-modal { width: min(620px, 100%); padding: 24px; border: 1px solid #e3e8f1; border-radius: 20px; background: #fffffff2; box-shadow: 0 24px 80px #17233c33; }
 .hidden { display: none !important; }
+.qr-card { margin-bottom: 16px; }
+.qr-card .section-title { flex-wrap: wrap; }
+.qr-card .section-title > div { min-width: 0; flex-basis: 260px; }
+.qr-card p { color: #6c7890; font-size: 13px; line-height: 1.65; }
+.qr-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 14px; }
+.qr-help { margin-top: 16px; }
+.qr-feedback { margin-top: 10px; }
+.qr-feedback.error { color: #b34d15; }
+.qr-sources { margin-top: 16px; color: #485773; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.qr-history { margin-top: 16px; color: #485773; font-size: 13px; }
+.qr-history summary { cursor: pointer; }
+.qr-record { padding: 12px 0; border-bottom: 1px solid #edf1f7; }
+.qr-record p { margin: 6px 0; overflow-wrap: anywhere; white-space: pre-wrap; color: #26354f; }
+.qr-record button, .qr-record a { display: inline-block; margin-right: 10px; padding: 5px 8px; font-size: 12px; }
+.qr-record a { color: #1766df; }
+.qr-card .switch input:focus-visible + span { outline: 2px solid #1766df; outline-offset: 3px; }
+.qr-card .switch input { width: 1px; height: 1px; margin: 0; }
+.qr-monitor-page { min-width: 0; }
+.qr-monitor-page main { max-width: 820px; }
+.qr-card video { display: block; width: 100%; max-height: 280px; margin: 16px 0; border-radius: 12px; background: #17233c; object-fit: contain; }
+.qr-monitor-page .qr-card { margin-top: 16px; }
+.qr-monitor-page #share-result { overflow-wrap: anywhere; white-space: pre-wrap; }
 @media (max-width: 820px) {
   body { min-width: 0; }
   main { width: calc(100% - 24px); margin: 18px auto; }

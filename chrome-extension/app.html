@@ -39,6 +39,26 @@
       </button>
     </section>
 
+    <section class="card qr-card" aria-labelledby="qr-title">
+      <div class="section-title">
+        <div>
+          <h2 id="qr-title">二维码提醒</h2>
+          <p>看直播时，二维码出现就提醒你。</p>
+        </div>
+        <label class="switch"><input id="qr-enabled" type="checkbox"><span></span>开启提醒</label>
+      </div>
+      <div id="qr-sources" class="qr-sources" role="status">提醒已关闭。</div>
+      <p id="share-status" class="qr-help hidden" role="status"></p>
+      <div id="qr-capture-actions" class="qr-actions hidden">
+        <button id="share-start" class="secondary hidden">选择直播画面</button>
+        <button id="share-stop" class="secondary hidden" disabled>停止共享</button>
+      </div>
+      <video id="share-video" autoplay muted playsinline class="hidden"></video>
+      <p id="share-result" class="qr-help hidden" role="alert"></p>
+      <p id="qr-feedback" class="qr-feedback hidden" role="status"></p>
+      <details id="qr-history-panel" class="qr-history hidden"><summary>最近提醒</summary><div id="qr-history"></div></details>
+    </section>
+
     <section class="card files-card">
       <div class="section-title">
         <div>
@@ -205,6 +225,11 @@
     </section>
   </div>
 
+  <script src="video-platform.js"></script>
+  <script src="qr-core.js"></script>
+  <script src="qr-panel.js"></script>
+  <script src="vendor/jsQR.js"></script>
+  <script src="qr-monitor.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>直播二维码提醒 · SJTU 课程资料助手</title><link rel="stylesheet" href="app.css"></head>
+<body class="qr-monitor-page">
+  <main>
+    <header><div class="mark">S</div><h1>直播二维码提醒</h1></header>
+    <section class="card qr-card" aria-labelledby="qr-title">
+      <h2 id="qr-title">选择直播画面，剩下的交给我</h2>
+      <div id="qr-sources" class="qr-sources" role="status">选择正在播放的直播画面即可开始提醒。</div>
+      <p id="share-status" class="qr-help hidden" role="status"></p>
+      <div id="qr-capture-actions" class="qr-actions">
+        <button id="share-start" class="primary">选择直播画面</button>
+        <button id="share-stop" class="secondary hidden" disabled>停止共享</button>
+      </div>
+      <video id="share-video" autoplay muted playsinline class="hidden"></video>
+      <p id="share-result" class="qr-help hidden" role="alert"></p>
+      <p id="qr-feedback" class="qr-feedback hidden" role="status"></p>
+      <p class="qr-help">选择后请保留此页面，并让直播继续播放。</p>
+      <details id="qr-history-panel" class="qr-history hidden"><summary>最近提醒</summary><div id="qr-history"></div></details>
+    </section>
+  </main>
+  <script src="vendor/jsQR.js"></script><script src="qr-core.js"></script><script src="qr-panel.js"></script><script src="qr-monitor.js"></script>
+</body>
+</html>
